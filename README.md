@@ -48,14 +48,10 @@ You can download a ready-to-run build from the project's [GitHub Releases](../..
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/SSH Keys Manager.app"
-open "/Applications/SSH Keys Manager.app"
 ```
 
-If Gatekeeper blocks the DMG itself before you can open it, clear the quarantine attribute on the downloaded DMG first:
-
 ```bash
-xattr -dr com.apple.quarantine "/path/to/SSH-Keys-Manager-v1.0.dmg"
-open "/path/to/SSH-Keys-Manager-v1.0.dmg"
+open "/Applications/SSH Keys Manager.app"
 ```
 
 <p align="right"><a href="#readme-top">Back to top</a></p>
