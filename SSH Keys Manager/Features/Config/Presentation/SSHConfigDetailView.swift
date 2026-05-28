@@ -50,7 +50,7 @@ private struct SSHConfigTitleSection: View {
 }
 
 private struct SSHConfigFieldsSection: View {
-    private let detailLabelWidth: CGFloat = 110
+    private let detailLabelWidth: CGFloat = 180
 
     let entry: SSHConfigEntry
 
