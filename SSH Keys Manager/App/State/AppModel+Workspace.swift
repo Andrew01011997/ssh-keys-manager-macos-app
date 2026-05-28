@@ -120,6 +120,7 @@ final class AppWorkspaceCoordinator {
     }
 
     private func resetWorkspaceState(for directoryPath: String) {
+        model.invalidateConfigHostReachability()
         model.sshDirectoryPath = directoryPath
         model.keys = []
         model.otherKeys = []

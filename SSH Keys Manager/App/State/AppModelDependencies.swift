@@ -3,6 +3,7 @@ import Foundation
 struct AppModelDependencies {
     let keyStorage: any SSHKeyStorageManaging
     let configStorage: any SSHConfigStorageManaging
+    let hostReachabilityChecker: any SSHHostReachabilityChecking
     let keyActions: any SSHKeyActionHandling
     let preferences: any AppPreferencesManaging
     let workspaceValidator: any SSHWorkspaceValidating
@@ -11,6 +12,7 @@ struct AppModelDependencies {
     init(
         keyStorage: any SSHKeyStorageManaging,
         configStorage: any SSHConfigStorageManaging,
+        hostReachabilityChecker: any SSHHostReachabilityChecking = SSHHostReachabilityChecker(),
         keyActions: any SSHKeyActionHandling,
         preferences: any AppPreferencesManaging = AppPreferences(),
         workspaceValidator: any SSHWorkspaceValidating = SSHWorkspaceValidator(),
@@ -19,6 +21,7 @@ struct AppModelDependencies {
     ) {
         self.keyStorage = keyStorage
         self.configStorage = configStorage
+        self.hostReachabilityChecker = hostReachabilityChecker
         self.keyActions = keyActions
         self.preferences = AppPreferencesWithPrivateKeyCopyConfirmer(
             preferences: preferences,
@@ -39,6 +42,7 @@ struct AppModelDependencies {
         self.init(
             keyStorage: keyStorage,
             configStorage: configStorage,
+            hostReachabilityChecker: SSHHostReachabilityChecker(),
             keyActions: keyActions,
             preferences: preferences,
             workspaceValidator: workspaceValidator,
@@ -64,6 +68,7 @@ struct AppModelDependencies {
         Self(
             keyStorage: SSHKeyStorage(keyStore: keyStore),
             configStorage: SSHConfigStorage(),
+            hostReachabilityChecker: SSHHostReachabilityChecker(),
             keyActions: SSHKeyFileActions(),
             preferences: preferences,
             workspaceValidator: SSHWorkspaceValidator(),

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SSHConfigRow: View {
     let entry: SSHConfigEntry
+    let status: SSHConfigHostReachabilityStatus?
     let isSelected: Bool
     @State private var isHovered = false
 
@@ -13,6 +14,9 @@ struct SSHConfigRow: View {
             Spacer()
             if let user = entry.user {
                 ConfigUserBadge(user: user, isSelected: isSelected)
+            }
+            if let status {
+                ConfigHostReachabilityIndicator(status: status, isSelected: isSelected)
             }
         }
         .padding(.horizontal, 10)
@@ -37,6 +41,70 @@ struct SSHConfigRow: View {
             Color(nsColor: .controlAccentColor).opacity(0.14)
         } else {
             Color.clear
+        }
+    }
+}
+
+private struct ConfigHostReachabilityIndicator: View {
+    let status: SSHConfigHostReachabilityStatus
+    let isSelected: Bool
+
+    @State private var isPulsing = false
+
+    var body: some View {
+        Circle()
+            .fill(indicatorColor)
+            .frame(width: 10, height: 10)
+            .overlay {
+                Circle()
+                    .strokeBorder(borderColor, lineWidth: 0.8)
+            }
+            .opacity(status == .checking ? (isPulsing ? 0.45 : 0.95) : 1)
+            .animation(
+                status == .checking
+                    ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true)
+                    : .default,
+                value: isPulsing
+            )
+            .onAppear {
+                if status == .checking {
+                    isPulsing = true
+                }
+            }
+            .onChange(of: status) { _, newStatus in
+                isPulsing = newStatus == .checking
+            }
+            .help(helpText)
+            .accessibilityLabel(helpText)
+    }
+
+    private var indicatorColor: Color {
+        switch status {
+        case .checking:
+            return isSelected ? Color.white.opacity(0.72) : Color.gray
+        case .reachable:
+            return isSelected ? Color.white.opacity(0.95) : Color.green
+        case .unreachable:
+            return isSelected ? Color.white.opacity(0.95) : Color.red
+        case .error:
+            return isSelected ? Color.white.opacity(0.95) : Color.orange
+        }
+    }
+
+    private var borderColor: Color {
+        isSelected ? Color.white.opacity(0.28) : Color.primary.opacity(0.12)
+    }
+
+    private var helpText: String {
+        switch status {
+        case .checking:
+            return "Checking host reachability"
+        case .reachable:
+            return "Host is reachable"
+        case .unreachable:
+            return "Host is unreachable"
+        case .error:
+            return "Host check failed"
         }
     }
 }

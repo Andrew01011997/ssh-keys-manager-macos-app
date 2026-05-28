@@ -5,6 +5,7 @@ struct SSHConfigEntryList: View {
     let isLoading: Bool
     let errorMessage: String?
     let isConfigFileMissing: Bool
+    let hostStatuses: [SSHConfigEntry.ID: SSHConfigHostReachabilityStatus]
     @Binding var selectedEntryID: SSHConfigEntry.ID?
 
     var body: some View {
@@ -36,7 +37,11 @@ struct SSHConfigEntryList: View {
                                 Spacer(minLength: 0)
                             } else {
                                 ForEach(entries) { entry in
-                                    SSHConfigRow(entry: entry, isSelected: selectedEntryID == entry.id)
+                                    SSHConfigRow(
+                                        entry: entry,
+                                        status: hostStatuses[entry.id],
+                                        isSelected: selectedEntryID == entry.id
+                                    )
                                         .onTapGesture {
                                             selectedEntryID = entry.id
                                         }

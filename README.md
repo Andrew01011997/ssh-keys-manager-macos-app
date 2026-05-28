@@ -68,7 +68,7 @@ Create new key pairs with a selected filename, key type, comment, and optional p
 
 ### SSH Config Editing
 
-Create, edit, reorder, and delete `Host` blocks from your SSH config with a native form-based editor. The app also helps map hosts to available private keys through `IdentityFile` selection.
+Create, edit, reorder, and delete `Host` blocks from your SSH config with a native form-based editor. The app also helps map hosts to available private keys through `IdentityFile` selection and can check whether configured SSH hosts are reachable directly from the sidebar.
 
 ![SSH config editor](assets/screenshots/config_edit_host.png)
 

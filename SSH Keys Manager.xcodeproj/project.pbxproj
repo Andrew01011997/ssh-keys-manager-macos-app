@@ -77,6 +77,8 @@
 		A00000000000000000001046 /* PrivateKeyCopyConfirmationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000046 /* PrivateKeyCopyConfirmationTests.swift */; };
 		A00000000000000000001047 /* PrivateKeyCopyConfirming.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000047 /* PrivateKeyCopyConfirming.swift */; };
 		A00000000000000000001048 /* SearchField.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000048 /* SearchField.swift */; };
+		A00000000000000000001049 /* SSHHostReachabilityChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000049 /* SSHHostReachabilityChecker.swift */; };
+		A0000000000000000000104A /* AppModel+ConfigReachability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000004A /* AppModel+ConfigReachability.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -161,6 +163,8 @@
 		A00000000000000000000046 /* PrivateKeyCopyConfirmationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateKeyCopyConfirmationTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000047 /* PrivateKeyCopyConfirming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateKeyCopyConfirming.swift; sourceTree = "<group>"; };
 		A00000000000000000000048 /* SearchField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchField.swift; sourceTree = "<group>"; };
+		A00000000000000000000049 /* SSHHostReachabilityChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHHostReachabilityChecker.swift; sourceTree = "<group>"; };
+		A0000000000000000000004A /* AppModel+ConfigReachability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+ConfigReachability.swift"; sourceTree = "<group>"; };
 		F763D5CD2F99202000B0E8E2 /* SSH Keys Manager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "SSH Keys Manager.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -264,6 +268,7 @@
 				A0000000000000000000002C /* AppModel+Loading.swift */,
 				A0000000000000000000002D /* AppModel+KeyOperations.swift */,
 				A0000000000000000000002E /* AppModel+ConfigOperations.swift */,
+				A0000000000000000000004A /* AppModel+ConfigReachability.swift */,
 				A0000000000000000000003A /* AppModel+Workspace.swift */,
 			);
 			path = State;
@@ -310,6 +315,7 @@
 			children = (
 				A00000000000000000000031 /* SSHConfigParser.swift */,
 				A00000000000000000000030 /* SSHConfigStorage.swift */,
+				A00000000000000000000049 /* SSHHostReachabilityChecker.swift */,
 				A00000000000000000000038 /* SSHConfigWriter.swift */,
 			);
 			path = Services;
@@ -554,6 +560,7 @@
 				A0000000000000000000102C /* AppModel+Loading.swift in Sources */,
 				A0000000000000000000102D /* AppModel+KeyOperations.swift in Sources */,
 				A0000000000000000000102E /* AppModel+ConfigOperations.swift in Sources */,
+				A0000000000000000000104A /* AppModel+ConfigReachability.swift in Sources */,
 				A0000000000000000000103A /* AppModel+Workspace.swift in Sources */,
 				A00000000000000000001005 /* AppTab.swift in Sources */,
 				A00000000000000000001007 /* SSHConfigEntry.swift in Sources */,
@@ -573,6 +580,7 @@
 				A00000000000000000001037 /* SSHConfigSortOrder.swift in Sources */,
 				A00000000000000000001030 /* SSHConfigStorage.swift in Sources */,
 				A00000000000000000001031 /* SSHConfigParser.swift in Sources */,
+				A00000000000000000001049 /* SSHHostReachabilityChecker.swift in Sources */,
 				A00000000000000000001038 /* SSHConfigWriter.swift in Sources */,
 				A00000000000000000001009 /* DetailField.swift in Sources */,
 				A0000000000000000000100A /* DetailTitle.swift in Sources */,
@@ -800,7 +808,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
@@ -813,7 +821,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "org.smidovich-yury.SSH-Keys-Manager";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -833,7 +841,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 3H23JM4W46;
 				ENABLE_APP_SANDBOX = NO;
@@ -846,7 +854,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "org.smidovich-yury.SSH-Keys-Manager";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

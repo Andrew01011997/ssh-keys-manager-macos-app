@@ -230,6 +230,83 @@ final class SSHKeyStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testReachabilityResolverUsesHostNameAndPort() {
+        let entry = makeSearchableConfigEntry(
+            hostName: "prod.example.com",
+            host: "prod",
+            identityFile: nil,
+            user: nil,
+            port: "2222"
+        )
+
+        let resolution = SSHHostReachabilityResolver.resolveTarget(for: entry)
+
+        XCTAssertEqual(
+            resolution,
+            .target(SSHHostReachabilityTarget(host: "prod.example.com", port: 2222))
+        )
+    }
+
+    @MainActor
+    func testReachabilityResolverFallsBackToHostAndDefaultPort() {
+        let entry = SSHConfigEntry(
+            id: "/tmp/config:1:web",
+            host: "web",
+            fields: [
+                SSHConfigField(id: "1:host", name: "Host", value: "web", normalizedName: "host")
+            ],
+            sourceFingerprint: "web"
+        )
+
+        let resolution = SSHHostReachabilityResolver.resolveTarget(for: entry)
+
+        XCTAssertEqual(resolution, .target(SSHHostReachabilityTarget(host: "web", port: 22)))
+    }
+
+    @MainActor
+    func testReachabilityResolverSkipsWildcardHostPatterns() {
+        let entry = makeSearchableConfigEntry(hostName: "prod.example.com", host: "*.corp", identityFile: nil, user: nil)
+
+        let resolution = SSHHostReachabilityResolver.resolveTarget(for: entry)
+
+        XCTAssertEqual(resolution, .unsupported)
+    }
+
+    @MainActor
+    func testReachabilityResolverSkipsMultipleHostAliases() {
+        let entry = makeSearchableConfigEntry(hostName: "prod.example.com", host: "prod staging", identityFile: nil, user: nil)
+
+        let resolution = SSHHostReachabilityResolver.resolveTarget(for: entry)
+
+        XCTAssertEqual(resolution, .unsupported)
+    }
+
+    @MainActor
+    func testReachabilityResolverSkipsTemplateHostName() {
+        let entry = makeSearchableConfigEntry(hostName: "%h.jump.example.com", host: "prod", identityFile: nil, user: nil)
+
+        let resolution = SSHHostReachabilityResolver.resolveTarget(for: entry)
+
+        XCTAssertEqual(resolution, .unsupported)
+    }
+
+    @MainActor
+    func testReachabilityResolverSkipsExpandedUserSyntaxInHostName() {
+        let entry = makeSearchableConfigEntry(hostName: "%r@bastion.example.com", host: "prod", identityFile: nil, user: nil)
+
+        let resolution = SSHHostReachabilityResolver.resolveTarget(for: entry)
+
+        XCTAssertEqual(resolution, .unsupported)
+    }
+
+    @MainActor
+    func testReachabilityCheckerClassifiesDNSErrorAsUnreachable() {
+        let result = SSHHostReachabilityChecker.classify(.dns(1))
+
+        XCTAssertEqual(result, .unreachable)
+    }
+
+    @MainActor
     func testDisplayedConfigEntriesFiltersBySearchText() throws {
         let entry1 = makeSearchableConfigEntry(hostName: "prod.example.com", host: "production", identityFile: "~/.ssh/id_ed25519", user: "deploy")
         let entry2 = makeSearchableConfigEntry(hostName: "staging.example.com", host: "staging", identityFile: "~/.ssh/id_rsa", user: "admin")
@@ -261,6 +338,151 @@ final class SSHKeyStoreTests: XCTestCase {
 
         model.configSearchText = ""
         XCTAssertEqual(model.displayedConfigEntries.map(\.host).sorted(), ["production", "staging"])
+    }
+
+    @MainActor
+    func testCheckConfigHostReachabilityUpdatesStatusesAndClearsLoadingFlag() async throws {
+        let entry = makeSearchableConfigEntry(hostName: "prod.example.com", host: "prod", identityFile: nil, user: nil)
+        let checker = RecordingSSHHostReachabilityChecker(
+            resultsByHost: ["prod.example.com": .reachable],
+            delaysByHost: ["prod.example.com": 50_000_000]
+        )
+        let model = AppModel(
+            configEntries: [entry],
+            dependencies: AppModelDependencies(
+                keyStorage: RecordingSSHKeyStorage(),
+                configStorage: RecordingSSHConfigStorage(),
+                hostReachabilityChecker: checker,
+                keyActions: SSHKeyFileActions()
+            )
+        )
+
+        model.checkConfigHostReachability()
+
+        XCTAssertTrue(model.isCheckingConfigHosts)
+        XCTAssertEqual(model.configHostStatuses[entry.id], .checking)
+
+        try await waitUntil { @MainActor in
+            !model.isCheckingConfigHosts
+        }
+
+        let checkedTargets = checker.checkedTargetsSnapshot()
+        XCTAssertEqual(checkedTargets, [SSHHostReachabilityTarget(host: "prod.example.com", port: 22)])
+        XCTAssertEqual(model.configHostStatuses[entry.id], .reachable)
+    }
+
+    @MainActor
+    func testCheckConfigHostReachabilityDoesNotApplyStaleResults() async throws {
+        let slowEntry = makeSearchableConfigEntry(hostName: "slow.example.com", host: "slow", identityFile: nil, user: nil)
+        let fastEntry = makeSearchableConfigEntry(hostName: "fast.example.com", host: "fast", identityFile: nil, user: nil)
+        let checker = RecordingSSHHostReachabilityChecker(
+            resultsByHost: [
+                "slow.example.com": .unreachable,
+                "fast.example.com": .reachable
+            ],
+            delaysByHost: [
+                "slow.example.com": 300_000_000,
+                "fast.example.com": 10_000_000
+            ]
+        )
+        let model = AppModel(
+            configEntries: [slowEntry],
+            dependencies: AppModelDependencies(
+                keyStorage: RecordingSSHKeyStorage(),
+                configStorage: RecordingSSHConfigStorage(),
+                hostReachabilityChecker: checker,
+                keyActions: SSHKeyFileActions()
+            )
+        )
+
+        model.checkConfigHostReachability()
+        model.configEntries = [fastEntry]
+        model.originalConfigEntries = [fastEntry]
+        model.checkConfigHostReachability()
+
+        try await waitUntil { @MainActor in
+            !model.isCheckingConfigHosts
+        }
+
+        XCTAssertNil(model.configHostStatuses[slowEntry.id])
+        XCTAssertEqual(model.configHostStatuses[fastEntry.id], .reachable)
+    }
+
+    @MainActor
+    func testCheckConfigHostReachabilityShowsAggregatedBannerForErrors() async throws {
+        let invalidPortEntry = makeSearchableConfigEntry(
+            hostName: "bad-port.example.com",
+            host: "bad-port",
+            identityFile: nil,
+            user: nil,
+            port: "99999"
+        )
+        let runtimeErrorEntry = makeSearchableConfigEntry(
+            hostName: "broken.example.com",
+            host: "broken",
+            identityFile: nil,
+            user: nil
+        )
+        let checker = RecordingSSHHostReachabilityChecker(
+            resultsByHost: ["broken.example.com": .error("dns failure")]
+        )
+        let model = AppModel(
+            configEntries: [invalidPortEntry, runtimeErrorEntry],
+            dependencies: AppModelDependencies(
+                keyStorage: RecordingSSHKeyStorage(),
+                configStorage: RecordingSSHConfigStorage(),
+                hostReachabilityChecker: checker,
+                keyActions: SSHKeyFileActions()
+            )
+        )
+
+        model.checkConfigHostReachability()
+
+        try await waitUntil { @MainActor in
+            !model.isCheckingConfigHosts
+        }
+
+        XCTAssertEqual(model.configHostStatuses[invalidPortEntry.id], .error)
+        XCTAssertEqual(model.configHostStatuses[runtimeErrorEntry.id], .error)
+        XCTAssertEqual(model.notification?.message, "Could not fully check 2 hosts")
+        XCTAssertEqual(model.notification?.kind, .warning)
+    }
+
+    @MainActor
+    func testLoadConfigIfNeededAutoStartsReachabilityCheck() async throws {
+        let entry = makeSearchableConfigEntry(hostName: "prod.example.com", host: "prod", identityFile: nil, user: nil)
+        let directory = try makeTemporaryDirectory()
+        let normalizedPath = SSHWorkspacePath.normalizeDirectoryPath(directory.path)
+        let suiteName = "SSHKeyStoreTests-\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            userDefaults.removePersistentDomain(forName: suiteName)
+        }
+        let preferences = AppPreferences(userDefaults: userDefaults)
+        preferences.setSSHDirectoryPath(normalizedPath)
+        let checker = RecordingSSHHostReachabilityChecker(
+            resultsByHost: ["prod.example.com": .reachable]
+        )
+        let configStorage = RecordingSSHConfigStorage(entriesByPath: [normalizedPath: [entry]])
+        let model = AppModel(
+            dependencies: AppModelDependencies(
+                keyStorage: RecordingSSHKeyStorage(),
+                configStorage: configStorage,
+                hostReachabilityChecker: checker,
+                keyActions: SSHKeyFileActions(),
+                preferences: preferences
+            )
+        )
+
+        await model.loadConfigIfNeeded()
+
+        try await waitUntil { @MainActor in
+            !model.isCheckingConfigHosts
+        }
+
+        XCTAssertEqual(model.configHostStatuses[entry.id], .reachable)
+        let checkedTargets = checker.checkedTargetsSnapshot()
+        XCTAssertEqual(checkedTargets, [SSHHostReachabilityTarget(host: "prod.example.com", port: 22)])
     }
 
     @MainActor
@@ -2600,6 +2822,9 @@ final class SSHKeyStoreTests: XCTestCase {
         }
         let preferences = AppPreferences(userDefaults: userDefaults)
         preferences.setSSHDirectoryPath(normalizedPath)
+        let checker = RecordingSSHHostReachabilityChecker(
+            resultsByHost: ["retry-host": .reachable]
+        )
         let configStorage = FlakySSHConfigStorage(
             failureCountByPath: [normalizedPath: 1],
             entriesByPath: [
@@ -2610,6 +2835,7 @@ final class SSHKeyStoreTests: XCTestCase {
             dependencies: AppModelDependencies(
                 keyStorage: RecordingSSHKeyStorage(),
                 configStorage: configStorage,
+                hostReachabilityChecker: checker,
                 keyActions: SSHKeyFileActions(),
                 preferences: preferences,
                 workspaceValidator: SSHWorkspaceValidator(fileManager: fileManager)
@@ -2621,6 +2847,10 @@ final class SSHKeyStoreTests: XCTestCase {
         XCTAssertNotNil(model.configErrorMessage)
 
         await model.loadConfigIfNeeded()
+
+        try await waitUntil { @MainActor in
+            !model.isCheckingConfigHosts
+        }
 
         XCTAssertEqual(model.configEntries.map(\.host), ["retry-host"])
         XCTAssertNil(model.configErrorMessage)
@@ -2967,7 +3197,8 @@ final class SSHKeyStoreTests: XCTestCase {
         hostName: String,
         host: String,
         identityFile: String?,
-        user: String?
+        user: String?,
+        port: String? = nil
     ) -> SSHConfigEntry {
         var fields: [SSHConfigField] = [
             SSHConfigField(id: "1:host", name: "Host", value: host, normalizedName: "host"),
@@ -2986,6 +3217,12 @@ final class SSHKeyStoreTests: XCTestCase {
                 SSHConfigField(id: "\(fieldIndex):user", name: "User", value: user, normalizedName: "user")
             )
             fieldIndex += 1
+        }
+
+        if let port {
+            fields.append(
+                SSHConfigField(id: "\(fieldIndex):port", name: "Port", value: port, normalizedName: "port")
+            )
         }
 
         return SSHConfigEntry(
@@ -3035,6 +3272,23 @@ final class SSHKeyStoreTests: XCTestCase {
             createdAt: .now,
             isPassphraseProtected: false
         )
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeoutNanoseconds: UInt64 = 1_500_000_000,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+
+        while !condition() {
+            if DispatchTime.now().uptimeNanoseconds >= deadline {
+                XCTFail("Timed out while waiting for condition")
+                return
+            }
+
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 }
 
@@ -3199,6 +3453,43 @@ private actor RecordingSSHConfigStorage: SSHConfigStorageManaging {
 
     func createEmptyConfig(inDirectory directoryPath: String) async throws {
         entriesByPath[directoryPath] = []
+    }
+}
+
+private final class RecordingSSHHostReachabilityChecker: @unchecked Sendable, SSHHostReachabilityChecking {
+    private let resultsByHost: [String: SSHHostReachabilityCheckResult]
+    private let delaysByHost: [String: UInt64]
+    private let lock = NSLock()
+    private var checkedTargets: [SSHHostReachabilityTarget] = []
+
+    init(
+        resultsByHost: [String: SSHHostReachabilityCheckResult] = [:],
+        delaysByHost: [String: UInt64] = [:]
+    ) {
+        self.resultsByHost = resultsByHost
+        self.delaysByHost = delaysByHost
+    }
+
+    func checkedTargetsSnapshot() -> [SSHHostReachabilityTarget] {
+        lock.lock()
+        defer { lock.unlock() }
+        return checkedTargets
+    }
+
+    func check(target: SSHHostReachabilityTarget, timeout: Duration) async -> SSHHostReachabilityCheckResult {
+        appendCheckedTarget(target)
+
+        if let delay = delaysByHost[target.host] {
+            try? await Task.sleep(nanoseconds: delay)
+        }
+
+        return resultsByHost[target.host] ?? .reachable
+    }
+
+    private func appendCheckedTarget(_ target: SSHHostReachabilityTarget) {
+        lock.lock()
+        defer { lock.unlock() }
+        checkedTargets.append(target)
     }
 }
 

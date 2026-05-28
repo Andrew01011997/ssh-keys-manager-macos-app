@@ -25,11 +25,17 @@ extension AppModel {
     func deleteSelectedConfigEntry() async throws {
         try await configCoordinator.deleteSelectedEntry()
     }
+
+    func checkConfigHostReachability() {
+        configCoordinator.checkHostReachability()
+    }
 }
 
 @MainActor
 final class SSHConfigCoordinator {
     private unowned let model: AppModel
+    private let reachabilityTimeout: Duration = .seconds(3)
+    private let maximumConcurrentHostChecks = 8
 
     init(model: AppModel) {
         self.model = model
@@ -82,6 +88,8 @@ final class SSHConfigCoordinator {
                     return
                 }
 
+                model.invalidateConfigHostReachability()
+
                 let addedHost = request.trimmedHost
                 if let addedEntry = model.originalConfigEntries.last(where: { $0.host == addedHost }) {
                     model.selectedConfigEntryID = addedEntry.id
@@ -121,6 +129,8 @@ final class SSHConfigCoordinator {
                 guard directoryPath == model.sshDirectoryPath else {
                     return
                 }
+
+                model.invalidateConfigHostReachability()
 
                 let updatedHost = request.trimmedHost
                 if let updatedEntry = model.originalConfigEntries.first(where: { $0.host == updatedHost }) {
@@ -167,6 +177,7 @@ final class SSHConfigCoordinator {
                     return
                 }
 
+                model.invalidateConfigHostReachability()
                 selectConfigEntryAfterDeletion(previousIndex: previousIndex)
                 model.showNotification("Deleted SSH config host \(selectedConfigEntry.host)", kind: .success)
             } catch {
@@ -180,6 +191,7 @@ final class SSHConfigCoordinator {
         let previousSelection = model.selectedConfigEntryID
         let directoryPath = model.sshDirectoryPath
         var didLoadConfig = false
+        model.invalidateConfigHostReachability()
 
         await model.withConfigOperation {
             do {
@@ -221,6 +233,12 @@ final class SSHConfigCoordinator {
                 model.loadedConfigDirectoryPath = directoryPath
             }
         }
+
+        guard didLoadConfig, directoryPath == model.sshDirectoryPath else {
+            return
+        }
+
+        scheduleAutoCheckAfterLoadIfNeeded()
     }
 
     private func selectConfigEntryAfterDeletion(previousIndex: Int) {
@@ -231,5 +249,139 @@ final class SSHConfigCoordinator {
 
         let nextIndex = min(previousIndex, model.configEntries.count - 1)
         model.selectedConfigEntryID = model.configEntries[nextIndex].id
+    }
+
+    func checkHostReachability() {
+        let directoryPath = model.sshDirectoryPath
+        let entries = model.configEntries
+        let retainedModel = model
+        let preparedEntries = entries.map { entry in
+            (entry, SSHHostReachabilityResolver.resolveTarget(for: entry))
+        }
+
+        model.configHostReachabilityTask?.cancel()
+        model.configHostCheckGeneration += 1
+        let generation = model.configHostCheckGeneration
+
+        var statuses: [SSHConfigEntry.ID: SSHConfigHostReachabilityStatus] = [:]
+        var initialErrorCount = 0
+        var readyEntries: [(SSHConfigEntry, SSHHostReachabilityTarget)] = []
+
+        for (entry, resolution) in preparedEntries {
+            switch resolution {
+            case .unsupported:
+                break
+            case .invalidConfiguration:
+                statuses[entry.id] = .error
+                initialErrorCount += 1
+            case .target(let target):
+                statuses[entry.id] = .checking
+                readyEntries.append((entry, target))
+            }
+        }
+
+        model.configHostStatuses = statuses
+        model.isCheckingConfigHosts = !readyEntries.isEmpty
+
+        guard !readyEntries.isEmpty else {
+            if initialErrorCount > 0 {
+                model.showConfigReachabilityErrorSummary(count: initialErrorCount)
+            }
+            return
+        }
+
+        model.configHostReachabilityTask = Task {
+            await runReachabilityChecks(
+                model: retainedModel,
+                entries: readyEntries,
+                directoryPath: directoryPath,
+                generation: generation,
+                initialErrorCount: initialErrorCount
+            )
+        }
+    }
+
+    func scheduleAutoCheckAfterLoadIfNeeded() {
+        guard !model.configEntries.isEmpty else {
+            return
+        }
+
+        checkHostReachability()
+    }
+
+    private func runReachabilityChecks(
+        model: AppModel,
+        entries: [(SSHConfigEntry, SSHHostReachabilityTarget)],
+        directoryPath: String,
+        generation: Int,
+        initialErrorCount: Int
+    ) async {
+        var errorCount = initialErrorCount
+
+        for batchStart in stride(from: 0, to: entries.count, by: maximumConcurrentHostChecks) {
+            if Task.isCancelled {
+                return
+            }
+
+            let batchEnd = min(batchStart + maximumConcurrentHostChecks, entries.count)
+            let batch = Array(entries[batchStart..<batchEnd])
+
+            let results = await withTaskGroup(
+                of: (SSHConfigEntry.ID, SSHHostReachabilityCheckResult).self,
+                returning: [(SSHConfigEntry.ID, SSHHostReachabilityCheckResult)].self
+            ) { group in
+                for (entry, target) in batch {
+                    let checker = model.hostReachabilityChecker
+                    group.addTask {
+                        let result = await checker.check(
+                            target: target,
+                            timeout: self.reachabilityTimeout
+                        )
+                        return (entry.id, result)
+                    }
+                }
+
+                var collected: [(SSHConfigEntry.ID, SSHHostReachabilityCheckResult)] = []
+                for await result in group {
+                    collected.append(result)
+                }
+                return collected
+            }
+
+            await MainActor.run {
+                guard self.isCurrentReachabilityRun(model: model, generation: generation, directoryPath: directoryPath) else {
+                    return
+                }
+
+                for (entryID, result) in results {
+                    switch result {
+                    case .reachable:
+                        self.model.configHostStatuses[entryID] = .reachable
+                    case .unreachable:
+                        self.model.configHostStatuses[entryID] = .unreachable
+                    case .error:
+                        self.model.configHostStatuses[entryID] = .error
+                        errorCount += 1
+                    }
+                }
+            }
+        }
+
+        await MainActor.run {
+            guard self.isCurrentReachabilityRun(model: model, generation: generation, directoryPath: directoryPath) else {
+                return
+            }
+
+            model.isCheckingConfigHosts = false
+            model.configHostReachabilityTask = nil
+
+            if errorCount > 0 {
+                model.showConfigReachabilityErrorSummary(count: errorCount)
+            }
+        }
+    }
+
+    private func isCurrentReachabilityRun(model: AppModel, generation: Int, directoryPath: String) -> Bool {
+        generation == model.configHostCheckGeneration && directoryPath == model.sshDirectoryPath
     }
 }

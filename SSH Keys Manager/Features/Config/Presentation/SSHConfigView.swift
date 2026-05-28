@@ -19,9 +19,14 @@ struct SSHConfigView: View {
                 onRefresh: {
                     model.configCoordinator.load()
                 },
+                onCheckHostReachability: {
+                    model.checkConfigHostReachability()
+                },
                 onAddHost: {
                     activeSheet = .add
                 },
+                isCheckingHosts: model.isCheckingConfigHosts,
+                hostStatuses: model.configHostStatuses,
                 sortOrder: $model.configSortOrder,
                 selectedEntryID: $model.selectedConfigEntryID,
                 configSearchText: $model.configSearchText

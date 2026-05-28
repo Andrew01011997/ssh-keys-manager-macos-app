@@ -73,12 +73,15 @@ final class AppModel {
     var isLoadingConfig = false
     var configErrorMessage: String?
     var isConfigFileMissing = false
+    var isCheckingConfigHosts = false
     var isChangingSSHDirectory = false
     var notification: AppNotification?
+    var configHostStatuses: [SSHConfigEntry.ID: SSHConfigHostReachabilityStatus] = [:]
 
     var originalConfigEntries: [SSHConfigEntry]
     let keyStorage: any SSHKeyStorageManaging
     let configStorage: any SSHConfigStorageManaging
+    let hostReachabilityChecker: any SSHHostReachabilityChecking
     let keyActions: any SSHKeyActionHandling
     let preferences: any AppPreferencesManaging
     let workspaceValidator: any SSHWorkspaceValidating
@@ -89,6 +92,8 @@ final class AppModel {
     var activeDirectoryChangeCount = 0
     var loadedKeysDirectoryPath: String?
     var loadedConfigDirectoryPath: String?
+    @ObservationIgnored var configHostCheckGeneration = 0
+    @ObservationIgnored var configHostReachabilityTask: Task<Void, Never>?
 
     init(
         keys: [SSHKeyItem] = [],
@@ -106,6 +111,7 @@ final class AppModel {
         self.originalConfigEntries = configEntries
         self.keyStorage = resolvedDependencies.keyStorage
         self.configStorage = resolvedDependencies.configStorage
+        self.hostReachabilityChecker = resolvedDependencies.hostReachabilityChecker
         self.keyActions = resolvedDependencies.keyActions
         self.preferences = resolvedDependencies.preferences
         self.workspaceValidator = resolvedDependencies.workspaceValidator

@@ -9,7 +9,10 @@ struct SSHConfigSidebar: View {
     let canRevealSSHDirectory: Bool
     let onRevealConfig: () -> Void
     let onRefresh: () -> Void
+    let onCheckHostReachability: () -> Void
     let onAddHost: () -> Void
+    let isCheckingHosts: Bool
+    let hostStatuses: [SSHConfigEntry.ID: SSHConfigHostReachabilityStatus]
     @Binding var sortOrder: SSHConfigSortOrder
     @Binding var selectedEntryID: SSHConfigEntry.ID?
     @Binding var configSearchText: String
@@ -28,6 +31,10 @@ struct SSHConfigSidebar: View {
                     accessibilityLabel: "Refresh SSH config",
                     action: onRefresh
                 )
+                SidebarHostCheckButton(
+                    isChecking: isCheckingHosts,
+                    action: onCheckHostReachability
+                )
                 SortOrderMenu(
                     sortOrder: $sortOrder,
                     help: "Sort SSH config hosts",
@@ -43,7 +50,8 @@ struct SSHConfigSidebar: View {
                         isLoading: isLoading,
                         errorMessage: errorMessage,
                         isConfigFileMissing: isConfigFileMissing,
-                        selectedEntryID: $selectedEntryID
+                        hostStatuses: hostStatuses,
+                        selectedEntryID: $selectedEntryID,
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
@@ -68,5 +76,29 @@ struct SSHConfigSidebar: View {
         let count = entries.count
         let noun = count == 1 ? "host" : "hosts"
         return "\(count) \(noun)"
+    }
+}
+
+private struct SidebarHostCheckButton: View {
+    let isChecking: Bool
+    let action: () -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            ToolbarIcon(
+                systemName: "dot.radiowaves.left.and.right",
+                isHovered: isHovered && !isChecking
+            )
+        }
+        .buttonStyle(AppToolbarButtonStyle())
+        .frame(width: 28, height: 28)
+        .onHover { isHovered = isEnabled && !isChecking && $0 }
+        .opacity(isChecking ? 0.45 : 1)
+        .disabled(isChecking)
+        .help(isChecking ? "Checking SSH host reachability" : "Check SSH host reachability")
+        .accessibilityLabel("Check SSH host reachability")
     }
 }
