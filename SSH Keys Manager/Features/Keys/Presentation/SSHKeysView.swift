@@ -14,16 +14,16 @@ struct SSHKeysView: View {
                 errorMessage: model.keyErrorMessage,
                 canRevealSSHDirectory: model.canRevealSSHDirectoryInFinder,
                 onRevealDirectory: {
-                    model.keysCoordinator.revealSSHDirectoryInFinder()
+                    model.revealSSHDirectoryInFinder()
                 },
                 onRefresh: {
-                    model.keysCoordinator.load()
+                    model.loadKeys()
                 },
                 onGenerateKey: { request in
-                    try await model.keysCoordinator.generateKey(request)
+                    try await model.generateKey(request)
                 },
                 availableKeyName: { baseName in
-                    await model.keysCoordinator.availableKeyName(for: baseName)
+                    await model.availableKeyName(for: baseName)
                 },
                 selectedList: $model.selectedKeyList,
                 sortOrder: $model.keySortOrder,
@@ -37,40 +37,40 @@ struct SSHKeysView: View {
                 key: model.selectedKey,
                 emptyState: keyDetailEmptyState,
                 onReveal: {
-                    model.keysCoordinator.revealSelectedKeyInFinder()
+                    model.revealSelectedKeyInFinder()
                 },
                 onCopyPublicKey: {
-                    await model.keysCoordinator.copySelectedPublicKey()
+                    await model.copySelectedPublicKey()
                 },
                 onCopyPrivateKey: {
-                    await model.keysCoordinator.copySelectedPrivateKey()
+                    await model.copySelectedPrivateKey()
                 },
                 onCopyFingerprint: {
-                    model.keysCoordinator.copySelectedFingerprint()
+                    model.copySelectedFingerprint()
                 },
                 onRename: { newName in
-                    try await model.keysCoordinator.renameSelectedKey(to: newName)
+                    try await model.renameSelectedKey(to: newName)
                 },
                 onDuplicate: { newName in
-                    try await model.keysCoordinator.duplicateSelectedKey(to: newName)
+                    try await model.duplicateSelectedKey(to: newName)
                 },
                 onUpdateComment: { comment in
-                    try await model.keysCoordinator.updateSelectedKeyComment(comment)
+                    try await model.updateSelectedKeyComment(comment)
                 },
                 onChangePassphrase: { oldPassphrase, newPassphrase in
-                    try await model.keysCoordinator.changeSelectedKeyPassphrase(
+                    try await model.changeSelectedKeyPassphrase(
                         oldPassphrase: oldPassphrase,
                         newPassphrase: newPassphrase
                     )
                 },
                 onDelete: {
-                    try await model.keysCoordinator.deleteSelectedKey()
+                    try await model.deleteSelectedKey()
                 }
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: model.sshDirectoryPath) {
-            await model.keysCoordinator.loadIfNeeded()
+            await model.loadKeysIfNeeded()
         }
     }
 

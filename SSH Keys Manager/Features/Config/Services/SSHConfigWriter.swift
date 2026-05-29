@@ -235,7 +235,7 @@ enum SSHConfigWriter {
         return directoryURL
     }
 
-    nonisolated private static func createBackupIfNeeded(for configURL: URL, limit: Int) throws {
+    nonisolated static func createBackupIfNeeded(for configURL: URL, limit: Int) throws {
         let clampedLimit = SSHConfigBackupLimit.clamped(limit)
         guard clampedLimit > 0 else {
             return
@@ -301,7 +301,7 @@ enum SSHConfigWriter {
         return lineEnding + lineEnding
     }
 
-    nonisolated private static func preferredLineEnding(for contents: String) -> String {
+    nonisolated static func preferredLineEnding(for contents: String) -> String {
         if contents.contains("\r\n") {
             return "\r\n"
         }
@@ -320,7 +320,7 @@ enum SSHConfigWriter {
     }
 }
 
-private extension SSHConfigDocumentSnapshot {
+extension SSHConfigDocumentSnapshot {
     nonisolated func applying(
         _ mutation: SSHConfigMutation,
         configPath: String,

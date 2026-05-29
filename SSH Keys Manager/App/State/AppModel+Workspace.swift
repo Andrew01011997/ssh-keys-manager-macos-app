@@ -3,37 +3,8 @@ import Foundation
 @MainActor
 extension AppModel {
     func changeSSHDirectory(to selectedPath: String) async {
-        await workspaceCoordinator.changeSSHDirectory(to: selectedPath)
-    }
-
-    func createEmptyConfigFile() async {
-        await workspaceCoordinator.createEmptyConfigFile()
-    }
-
-    func setSSHKeygenPath(_ path: String) async {
-        await workspaceCoordinator.setSSHKeygenPath(path)
-    }
-
-    func resetSSHKeygenPath() async {
-        await workspaceCoordinator.resetSSHKeygenPath()
-    }
-
-    func refreshSSHKeygenStatus() {
-        workspaceCoordinator.refreshSSHKeygenStatus()
-    }
-}
-
-@MainActor
-final class AppWorkspaceCoordinator {
-    private unowned let model: AppModel
-
-    init(model: AppModel) {
-        self.model = model
-    }
-
-    func changeSSHDirectory(to selectedPath: String) async {
         let normalizedPath = SSHWorkspacePath.normalizeDirectoryPath(selectedPath)
-        guard normalizedPath != model.sshDirectoryPath else {
+        guard normalizedPath != sshDirectoryPath else {
             return
         }
 
@@ -43,47 +14,51 @@ final class AppWorkspaceCoordinator {
         }
 
         do {
-            let validatedPath = try model.validateWorkspaceDirectory(at: normalizedPath)
+            let validatedPath = try validateWorkspaceDirectory(at: normalizedPath)
             resetWorkspaceState(for: validatedPath)
-            model.preferences.setSSHDirectoryPath(validatedPath)
+            preferences.setSSHDirectoryPath(validatedPath)
 
-            async let keysReload: Void = model.keysCoordinator.loadIfNeeded()
-            async let configReload: Void = model.configCoordinator.loadIfNeeded()
+            async let keysReload: Void = loadKeysIfNeeded()
+            async let configReload: Void = loadConfigIfNeeded()
             _ = await (keysReload, configReload)
         } catch {
-            model.showNotification(error.localizedDescription, kind: .danger)
+            showNotification(error.localizedDescription, kind: .danger)
         }
     }
 
     func createEmptyConfigFile() async {
-        let directoryPath = model.sshDirectoryPath
+        let runner = WorkspaceMutationRunner(model: self)
 
-        await model.withConfigOperation {
-            do {
-                _ = try model.validateWorkspaceDirectory(at: directoryPath)
-                try await model.configStorage.createEmptyConfig(inDirectory: directoryPath)
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
+        do {
+            try await runner.runConfigMutation { directoryPath in
+                do {
+                    _ = try validateWorkspaceDirectory(at: directoryPath)
+                    try await configStorage.createEmptyConfig(inDirectory: directoryPath)
+                    guard runner.isCurrentWorkspace(directoryPath) else {
+                        return
+                    }
+
+                    try await reloadConfigEntries(from: directoryPath)
+                    guard runner.isCurrentWorkspace(directoryPath) else {
+                        return
+                    }
+
+                    selectedConfigEntryID = configEntries.first?.id
+                    showNotification("Created SSH config file", kind: .success)
+                } catch {
+                    guard runner.isCurrentWorkspace(directoryPath) else {
+                        return
+                    }
+
+                    configEntries = []
+                    originalConfigEntries = []
+                    selectedConfigEntryID = nil
+                    isConfigFileMissing = true
+                    configErrorMessage = "Unable to create SSH config: \(error.localizedDescription)"
                 }
-
-                try await model.reloadConfigEntries(from: directoryPath)
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                model.selectedConfigEntryID = model.configEntries.first?.id
-                model.showNotification("Created SSH config file", kind: .success)
-            } catch {
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                model.configEntries = []
-                model.originalConfigEntries = []
-                model.selectedConfigEntryID = nil
-                model.isConfigFileMissing = true
-                model.configErrorMessage = "Unable to create SSH config: \(error.localizedDescription)"
             }
+        } catch {
+            return
         }
     }
 
@@ -92,22 +67,22 @@ final class AppWorkspaceCoordinator {
             path,
             defaultPath: ExternalTool.sshKeygen.defaultPath
         )
-        let status = model.externalToolValidator.status(for: .sshKeygen, path: normalizedPath)
+        let status = externalToolValidator.status(for: .sshKeygen, path: normalizedPath)
 
         guard status.isAvailable else {
-            model.showNotification("Wrong binary selected", kind: .danger)
+            showNotification("Wrong binary selected", kind: .danger)
             return
         }
 
-        model.sshKeygenPath = normalizedPath
-        model.preferences.setSSHKeygenPath(normalizedPath)
-        model.sshKeygenStatus = status
-        await model.keyStorage.updateSSHKeygenPath(normalizedPath)
+        sshKeygenPath = normalizedPath
+        preferences.setSSHKeygenPath(normalizedPath)
+        sshKeygenStatus = status
+        await keyStorage.updateSSHKeygenPath(normalizedPath)
 
-        if model.sshKeygenStatus.isAvailable {
-            model.showNotification("Updated ssh-keygen path", kind: .success)
-        } else if let warningMessage = model.sshKeygenStatus.warningMessage {
-            model.showNotification(warningMessage, kind: .warning)
+        if sshKeygenStatus.isAvailable {
+            showNotification("Updated ssh-keygen path", kind: .success)
+        } else if let warningMessage = sshKeygenStatus.warningMessage {
+            showNotification(warningMessage, kind: .warning)
         }
     }
 
@@ -116,32 +91,34 @@ final class AppWorkspaceCoordinator {
     }
 
     func refreshSSHKeygenStatus() {
-        model.sshKeygenStatus = model.externalToolValidator.status(for: .sshKeygen, path: model.sshKeygenPath)
+        sshKeygenStatus = externalToolValidator.status(for: .sshKeygen, path: sshKeygenPath)
+    }
+}
+
+private extension AppModel {
+    func resetWorkspaceState(for directoryPath: String) {
+        invalidateConfigHostReachability()
+        sshDirectoryPath = directoryPath
+        keys = []
+        otherKeys = []
+        configEntries = []
+        originalConfigEntries = []
+        selectedKeyID = nil
+        selectedConfigEntryID = nil
+        loadedKeysDirectoryPath = nil
+        loadedConfigDirectoryPath = nil
+        keyErrorMessage = nil
+        configErrorMessage = nil
+        isConfigFileMissing = false
     }
 
-    private func resetWorkspaceState(for directoryPath: String) {
-        model.invalidateConfigHostReachability()
-        model.sshDirectoryPath = directoryPath
-        model.keys = []
-        model.otherKeys = []
-        model.configEntries = []
-        model.originalConfigEntries = []
-        model.selectedKeyID = nil
-        model.selectedConfigEntryID = nil
-        model.loadedKeysDirectoryPath = nil
-        model.loadedConfigDirectoryPath = nil
-        model.keyErrorMessage = nil
-        model.configErrorMessage = nil
-        model.isConfigFileMissing = false
+    func beginDirectoryChange() {
+        activeDirectoryChangeCount += 1
+        isChangingSSHDirectory = true
     }
 
-    private func beginDirectoryChange() {
-        model.activeDirectoryChangeCount += 1
-        model.isChangingSSHDirectory = true
-    }
-
-    private func endDirectoryChange() {
-        model.activeDirectoryChangeCount = max(model.activeDirectoryChangeCount - 1, 0)
-        model.isChangingSSHDirectory = model.activeDirectoryChangeCount > 0
+    func endDirectoryChange() {
+        activeDirectoryChangeCount = max(activeDirectoryChangeCount - 1, 0)
+        isChangingSSHDirectory = activeDirectoryChangeCount > 0
     }
 }

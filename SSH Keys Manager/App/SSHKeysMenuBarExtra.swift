@@ -18,7 +18,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         statusItem.menu = menu
 
         Task {
-            await model.keysCoordinator.loadIfNeeded()
+            await model.loadKeysIfNeeded()
         }
     }
 
@@ -31,7 +31,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         rebuildMenu()
 
         Task {
-            await model.keysCoordinator.loadIfNeeded()
+            await model.loadKeysIfNeeded()
             rebuildMenu()
         }
     }
@@ -111,7 +111,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
 
         Task {
-            await model.keysCoordinator.copyPublicKey(for: command.key)
+            await model.copyPublicKey(for: command.key)
         }
     }
 
@@ -121,7 +121,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
 
         Task {
-            await model.keysCoordinator.copyPrivateKey(for: command.key)
+            await model.copyPrivateKey(for: command.key)
         }
     }
 

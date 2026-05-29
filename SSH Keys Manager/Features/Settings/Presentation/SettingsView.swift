@@ -29,7 +29,7 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
-            model.workspaceCoordinator.refreshSSHKeygenStatus()
+            model.refreshSSHKeygenStatus()
         }
     }
 }
@@ -359,7 +359,7 @@ private struct SSHDirectoryPathRow: View {
         }
 
         Task {
-            await model.workspaceCoordinator.changeSSHDirectory(to: selectedURL.path)
+            await model.changeSSHDirectory(to: selectedURL.path)
         }
     }
 }
@@ -537,7 +537,7 @@ private struct ExternalToolsContent: View {
                     onChoose: chooseSSHKeygen,
                     onReset: {
                         Task {
-                            await model.workspaceCoordinator.resetSSHKeygenPath()
+                            await model.resetSSHKeygenPath()
                         }
                     }
                 )
@@ -565,7 +565,7 @@ private struct ExternalToolsContent: View {
         }
 
         Task {
-            await model.workspaceCoordinator.setSSHKeygenPath(selectedURL.path)
+            await model.setSSHKeygenPath(selectedURL.path)
         }
     }
 }

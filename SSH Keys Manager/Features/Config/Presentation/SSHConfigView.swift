@@ -14,10 +14,10 @@ struct SSHConfigView: View {
                 isConfigFileMissing: model.isConfigFileMissing,
                 canRevealSSHDirectory: model.canRevealSSHDirectoryInFinder,
                 onRevealConfig: {
-                    model.configCoordinator.revealConfigInFinder()
+                    model.revealConfigInFinder()
                 },
                 onRefresh: {
-                    model.configCoordinator.load()
+                    model.loadConfig()
                 },
                 onCheckHostReachability: {
                     model.checkConfigHostReachability()
@@ -47,7 +47,7 @@ struct SSHConfigView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: model.sshDirectoryPath) {
-            await model.configCoordinator.loadIfNeeded()
+            await model.loadConfigIfNeeded()
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -55,7 +55,7 @@ struct SSHConfigView: View {
                 AddSSHConfigHostView(
                     configPath: SSHWorkspacePath.configDisplayPath(for: model.sshDirectoryPath),
                     identityFileOptions: model.availableIdentityFileOptions,
-                    onSave: model.configCoordinator.addHost
+                    onSave: model.addConfigHost
                 )
             case .edit(let entry):
                 EditSSHConfigHostView(
@@ -63,13 +63,13 @@ struct SSHConfigView: View {
                     configPath: SSHWorkspacePath.configDisplayPath(for: model.sshDirectoryPath),
                     identityFileOptions: model.availableIdentityFileOptions,
                     onSave: { request in
-                        try await model.configCoordinator.updateHost(entry, with: request)
+                        try await model.updateConfigHost(entry, with: request)
                     }
                 )
             case .delete(let entry):
                 DeleteSSHConfigHostView(entry: entry) {
                     model.selectedConfigEntryID = entry.id
-                    try await model.configCoordinator.deleteSelectedEntry()
+                    try await model.deleteSelectedConfigEntry()
                 }
             }
         }
@@ -104,7 +104,7 @@ struct SSHConfigView: View {
                     systemImage: "plus.circle.fill",
                     action: {
                         Task {
-                            await model.workspaceCoordinator.createEmptyConfigFile()
+                            await model.createEmptyConfigFile()
                         }
                     }
                 )

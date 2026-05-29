@@ -164,9 +164,9 @@ private actor TestSSHKeyStorage: SSHKeyStorageManaging {
         XCTFail("changePassphrase should not be called")
     }
 
-    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {
+    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyRenameResult {
         XCTFail("rename should not be called")
-        return ""
+        return SSHKeyRenameResult(keyID: "", pathReplacements: [:])
     }
 
     func duplicate(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {

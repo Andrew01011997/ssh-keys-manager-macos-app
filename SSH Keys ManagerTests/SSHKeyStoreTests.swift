@@ -1279,7 +1279,7 @@ final class SSHKeyStoreTests: XCTestCase {
         XCTAssertFalse(fileManager.fileExists(atPath: publicURL.path))
     }
 
-    func testRenameCompletePairMovesBothFilesAndUpdatesConfigReferences() throws {
+    func testRenameCompletePairMovesBothFilesAndReturnsReferencePatchMap() throws {
         let directory = try makeTemporaryDirectory()
         let privateURL = directory.appendingPathComponent("id_ed25519")
         let publicURL = directory.appendingPathComponent("id_ed25519.pub")
@@ -1296,22 +1296,22 @@ final class SSHKeyStoreTests: XCTestCase {
         """.write(to: configURL, atomically: true, encoding: .utf8)
         let key = try completePair(named: "id_ed25519", in: directory)
 
-        let newID = try SSHKeyStore().rename(key, to: "prod_ed25519")
+        let renameResult = try SSHKeyStore().rename(key, to: "prod_ed25519")
 
         let renamedPrivateURL = directory.appendingPathComponent("prod_ed25519")
         let renamedPublicURL = directory.appendingPathComponent("prod_ed25519.pub")
-        XCTAssertEqual(newID, renamedPrivateURL.path)
+        XCTAssertEqual(renameResult.keyID, renamedPrivateURL.path)
+        XCTAssertEqual(
+            renameResult.pathReplacements,
+            [
+                privateURL.path: renamedPrivateURL.path,
+                publicURL.path: renamedPublicURL.path
+            ]
+        )
         XCTAssertFalse(fileManager.fileExists(atPath: privateURL.path))
         XCTAssertFalse(fileManager.fileExists(atPath: publicURL.path))
         XCTAssertTrue(fileManager.fileExists(atPath: renamedPrivateURL.path))
         XCTAssertTrue(fileManager.fileExists(atPath: renamedPublicURL.path))
-
-        let config = try String(contentsOf: configURL, encoding: .utf8)
-        XCTAssertTrue(config.contains("IdentityFile \(renamedPrivateURL.path)"))
-        XCTAssertTrue(config.contains("IdentityFile \(privateURL.path)_work"))
-        XCTAssertTrue(config.contains("# comment path: \(privateURL.path)"))
-        XCTAssertTrue(config.contains(renamedPrivateURL.path))
-        XCTAssertFalse(config.contains(renamedPublicURL.path))
     }
 
     func testRenameRejectsInvalidNameAndLeavesFilesInPlace() throws {
@@ -1409,10 +1409,11 @@ final class SSHKeyStoreTests: XCTestCase {
         try writePublicKey(to: publicURL)
         let key = try publicKey(named: "deploy.pub", in: directory)
 
-        let newID = try SSHKeyStore().rename(key, to: "production")
+        let renameResult = try SSHKeyStore().rename(key, to: "production")
 
         let renamedPublicURL = directory.appendingPathComponent("production.pub")
-        XCTAssertEqual(newID, renamedPublicURL.path)
+        XCTAssertEqual(renameResult.keyID, renamedPublicURL.path)
+        XCTAssertEqual(renameResult.pathReplacements, [publicURL.path: renamedPublicURL.path])
         XCTAssertFalse(fileManager.fileExists(atPath: publicURL.path))
         XCTAssertTrue(fileManager.fileExists(atPath: renamedPublicURL.path))
     }
@@ -1818,6 +1819,94 @@ final class SSHKeyStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRenameSelectedKeyUpdatesConfigIdentityFileReferencesViaDocumentStorage() async throws {
+        let directory = try makeTemporaryDirectory()
+        let privateURL = directory.appendingPathComponent("id_ed25519")
+        let publicURL = directory.appendingPathComponent("id_ed25519.pub")
+        let configURL = directory.appendingPathComponent("config")
+        try writePrivateKey(to: privateURL)
+        try writePublicKey(to: publicURL)
+        try """
+        Host production
+            IdentityFile \(privateURL.path)
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let suiteName = "SSHKeyStoreTests-\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            userDefaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let preferences = AppPreferences(userDefaults: userDefaults)
+        preferences.setSSHDirectoryPath(directory.path)
+
+        let model = AppModel(
+            dependencies: AppModelDependencies(
+                keyStorage: SSHKeyStorage(keyStore: SSHKeyStore()),
+                configStorage: SSHConfigStorage(),
+                keyActions: SSHKeyFileActions(),
+                preferences: preferences,
+                workspaceValidator: SSHWorkspaceValidator(fileManager: fileManager)
+            )
+        )
+
+        await model.loadKeysIfNeeded()
+        model.selectedKeyID = privateURL.path
+
+        try await model.renameSelectedKey(to: "prod_ed25519")
+
+        let renamedPrivateURL = directory.appendingPathComponent("prod_ed25519")
+        let config = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(config.contains("IdentityFile \(renamedPrivateURL.path)"))
+        XCTAssertFalse(config.contains("IdentityFile \(privateURL.path)\n"))
+    }
+
+    @MainActor
+    func testRenameSelectedKeyRollsBackFilesWhenConfigReferenceRewriteFails() async throws {
+        let directory = try makeTemporaryDirectory()
+        let privateURL = directory.appendingPathComponent("id_ed25519")
+        let publicURL = directory.appendingPathComponent("id_ed25519.pub")
+        try writePrivateKey(to: privateURL)
+        try writePublicKey(to: publicURL)
+        let key = try completePair(named: "id_ed25519", in: directory)
+
+        let suiteName = "SSHKeyStoreTests-\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            userDefaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let preferences = AppPreferences(userDefaults: userDefaults)
+        preferences.setSSHDirectoryPath(directory.path)
+
+        let model = AppModel(
+            keys: [key],
+            dependencies: AppModelDependencies(
+                keyStorage: SSHKeyStorage(keyStore: SSHKeyStore()),
+                configStorage: FailingRenameIdentitySSHConfigStorage(),
+                keyActions: SSHKeyFileActions(),
+                preferences: preferences,
+                workspaceValidator: SSHWorkspaceValidator(fileManager: fileManager)
+            )
+        )
+        model.selectedKeyID = key.id
+
+        do {
+            try await model.renameSelectedKey(to: "prod_ed25519")
+            XCTFail("Expected renameSelectedKey to throw")
+        } catch let error as TestError {
+            XCTAssertEqual(error, .expectedFailure)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertTrue(fileManager.fileExists(atPath: privateURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: publicURL.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: directory.appendingPathComponent("prod_ed25519").path))
+        XCTAssertFalse(fileManager.fileExists(atPath: directory.appendingPathComponent("prod_ed25519.pub").path))
+    }
+
+    @MainActor
     func testDuplicateSelectedKeyPropagatesFailureAndKeepsErrorMessage() async {
         let key = makeKeyItem(name: "id_ed25519")
         let keyStorage = FakeSSHKeyStorage(duplicateError: SSHKeyStoreError.keyNameAlreadyExists("id_ed25519_copy"))
@@ -2121,6 +2210,77 @@ final class SSHKeyStoreTests: XCTestCase {
 
         XCTAssertEqual(model.notification?.message, ReadOnlyModeRestrictionError.unavailable.notificationMessage)
         XCTAssertEqual(model.notification?.kind, .warning)
+    }
+
+    @MainActor
+    func testWorkspaceMutationRunnerRejectsReadOnlyMutationBeforeRunningBody() async throws {
+        let suiteName = "SSHKeyStoreTests-\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            userDefaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let preferences = AppPreferences(userDefaults: userDefaults)
+        preferences.setReadOnlyModeEnabled(true)
+
+        let model = AppModel(
+            dependencies: AppModelDependencies(
+                keyStorage: RecordingSSHKeyStorage(),
+                configStorage: RecordingSSHConfigStorage(),
+                keyActions: SSHKeyFileActions(),
+                preferences: preferences
+            )
+        )
+
+        var didRunBody = false
+
+        do {
+            try await WorkspaceMutationRunner(model: model).runKeyMutation { _ in
+                didRunBody = true
+            }
+            XCTFail("Expected read-only runner mutation to throw")
+        } catch {
+            XCTAssertEqual(error as? ReadOnlyModeRestrictionError, .unavailable)
+        }
+
+        XCTAssertFalse(didRunBody)
+        XCTAssertFalse(model.isLoadingKeys)
+        XCTAssertEqual(model.activeKeyOperationCount, 0)
+        XCTAssertEqual(model.notification?.kind, .warning)
+    }
+
+    @MainActor
+    func testWorkspaceMutationRunnerKeepsLoadingFlagUntilConcurrentMutationsFinish() async throws {
+        let model = AppModel(
+            dependencies: AppModelDependencies(
+                keyStorage: RecordingSSHKeyStorage(),
+                configStorage: RecordingSSHConfigStorage(),
+                keyActions: SSHKeyFileActions()
+            )
+        )
+        let runner = WorkspaceMutationRunner(model: model)
+
+        let task1 = Task {
+            try await runner.runKeyMutation(requiresWriteAccess: false) { _ in
+                try await Task.sleep(nanoseconds: 80_000_000)
+            }
+        }
+        let task2 = Task {
+            try await runner.runKeyMutation(requiresWriteAccess: false) { _ in
+                try await Task.sleep(nanoseconds: 80_000_000)
+            }
+        }
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertTrue(model.isLoadingKeys)
+        XCTAssertEqual(model.activeKeyOperationCount, 2)
+
+        _ = try await task1.value
+        _ = try await task2.value
+
+        XCTAssertFalse(model.isLoadingKeys)
+        XCTAssertEqual(model.activeKeyOperationCount, 0)
     }
 
     @MainActor
@@ -2739,6 +2899,73 @@ final class SSHKeyStoreTests: XCTestCase {
         XCTAssertNil(model.configErrorMessage)
     }
 
+    func testSSHConfigDocumentCreateEmptyIfMissingCreatesLoadableEmptyDocument() throws {
+        let directory = try makeTemporaryDirectory()
+
+        try SSHConfigDocument.createEmptyIfMissing(inDirectory: directory.path)
+
+        let document = try SSHConfigDocument.load(fromDirectory: directory.path)
+        XCTAssertTrue(document.entries.isEmpty)
+    }
+
+    func testSSHConfigDocumentRenameIdentityFileReferencesRewritesAbsoluteTildeAndQuotedPaths() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config")
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        let originalPath = homeDirectory.appendingPathComponent(".ssh/id_ed25519").path
+        let renamedPath = homeDirectory.appendingPathComponent(".ssh/prod_ed25519").path
+
+        try """
+        Host absolute
+            IdentityFile \(originalPath)
+        Host tilde
+            IdentityFile ~/.ssh/id_ed25519
+        Host quoted
+            IdentityFile "\(originalPath)"
+        Host quoted_tilde
+            IdentityFile '~/.ssh/id_ed25519'
+        # comment \(originalPath)
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        var document = try SSHConfigDocument.load(fromDirectory: directory.path)
+        try document.renameIdentityFileReferences([originalPath: renamedPath])
+        try document.write(propertyIndentation: .default, backupLimit: 0)
+
+        let updatedContents = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(updatedContents.contains("IdentityFile \(renamedPath)"))
+        XCTAssertTrue(updatedContents.contains("IdentityFile ~/.ssh/prod_ed25519"))
+        XCTAssertTrue(updatedContents.contains("IdentityFile \"\(renamedPath)\""))
+        XCTAssertTrue(updatedContents.contains("IdentityFile '~/.ssh/prod_ed25519'"))
+        XCTAssertTrue(updatedContents.contains("# comment \(originalPath)"))
+    }
+
+    @MainActor
+    func testAddConfigHostSelectsLastMatchingHostWhenDuplicateHostsExist() async throws {
+        let existingEntry = makeConfigEntry(host: "production", lineNumber: 1, fingerprint: "first")
+        let addedEntry = makeConfigEntry(host: "production", lineNumber: 5, fingerprint: "second")
+        let configStorage = RecordingAddSSHConfigStorage(loadEntriesResult: [existingEntry, addedEntry])
+
+        let model = AppModel(
+            configEntries: [existingEntry],
+            dependencies: AppModelDependencies(
+                keyStorage: SSHKeyStorage(keyStore: SSHKeyStore()),
+                configStorage: configStorage,
+                keyActions: SSHKeyFileActions()
+            )
+        )
+
+        try await model.addConfigHost(
+            SSHConfigHostSaveRequest(
+                host: "production",
+                properties: [.init(name: "HostName", value: "new.example.com")]
+            )
+        )
+
+        let addedHosts = await configStorage.addedHostsSnapshot()
+        XCTAssertEqual(addedHosts, ["production"])
+        XCTAssertEqual(model.selectedConfigEntryID, addedEntry.id)
+    }
+
     @MainActor
     func testCreateEmptyConfigFilePreservesMissingStateWhenCreationFails() async throws {
         let directory = try makeTemporaryDirectory()
@@ -3292,7 +3519,7 @@ final class SSHKeyStoreTests: XCTestCase {
     }
 }
 
-private enum TestError: Error {
+private enum TestError: Error, Equatable {
     case expectedFailure
 }
 
@@ -3319,6 +3546,42 @@ private actor FakeSSHConfigStorage: SSHConfigStorageManaging {
             let deletedHost = await MainActor.run { entry.host }
             deletedHosts.append(deletedHost)
         case .add, .update:
+            XCTFail("Unexpected config mutation: \(mutation)")
+        }
+    }
+
+    func createEmptyConfig(inDirectory directoryPath: String) async throws {
+        XCTFail("createEmptyConfig should not be called")
+    }
+}
+
+private actor RecordingAddSSHConfigStorage: SSHConfigStorageManaging {
+    private let loadEntriesResult: [SSHConfigEntry]
+    private(set) var addedHosts: [String] = []
+
+    init(loadEntriesResult: [SSHConfigEntry]) {
+        self.loadEntriesResult = loadEntriesResult
+    }
+
+    func addedHostsSnapshot() -> [String] {
+        addedHosts
+    }
+
+    func loadEntries(from directoryPath: String) async throws -> [SSHConfigEntry] {
+        loadEntriesResult
+    }
+
+    func apply(
+        _ mutation: SSHConfigMutation,
+        inDirectory directoryPath: String,
+        propertyIndentation: SSHConfigHostPropertyIndentation,
+        backupLimit: Int
+    ) async throws {
+        switch mutation {
+        case .add(let request):
+            let addedHost = await MainActor.run { request.trimmedHost }
+            addedHosts.append(addedHost)
+        case .update, .delete:
             XCTFail("Unexpected config mutation: \(mutation)")
         }
     }
@@ -3363,12 +3626,15 @@ private actor FakeSSHKeyStorage: SSHKeyStorageManaging {
         XCTFail("changePassphrase should not be called")
     }
 
-    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {
+    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyRenameResult {
         if let renameError {
             throw renameError
         }
 
-        return "/tmp/\(newName)"
+        return SSHKeyRenameResult(
+            keyID: "/tmp/\(newName)",
+            pathReplacements: [:]
+        )
     }
 
     func duplicate(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {
@@ -3412,6 +3678,35 @@ private actor FailingCreateSSHConfigStorage: SSHConfigStorageManaging {
 
     func createEmptyConfig(inDirectory directoryPath: String) async throws {
         throw TestError.expectedFailure
+    }
+}
+
+private actor FailingRenameIdentitySSHConfigStorage: SSHConfigStorageManaging {
+    func loadEntries(from directoryPath: String) async throws -> [SSHConfigEntry] {
+        XCTFail("loadEntries should not be called")
+        return []
+    }
+
+    func apply(
+        _ mutation: SSHConfigMutation,
+        inDirectory directoryPath: String,
+        propertyIndentation: SSHConfigHostPropertyIndentation,
+        backupLimit: Int
+    ) async throws {
+        XCTFail("apply should not be called")
+    }
+
+    func renameIdentityFileReferences(
+        _ replacements: [String: String],
+        inDirectory directoryPath: String,
+        propertyIndentation: SSHConfigHostPropertyIndentation,
+        backupLimit: Int
+    ) async throws {
+        throw TestError.expectedFailure
+    }
+
+    func createEmptyConfig(inDirectory directoryPath: String) async throws {
+        XCTFail("createEmptyConfig should not be called")
     }
 }
 
@@ -3593,9 +3888,9 @@ private actor RecordingSSHKeyStorage: SSHKeyStorageManaging {
         XCTFail("changePassphrase should not be called")
     }
 
-    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {
+    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyRenameResult {
         XCTFail("rename should not be called")
-        return ""
+        return SSHKeyRenameResult(keyID: "", pathReplacements: [:])
     }
 
     func duplicate(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {
@@ -3669,9 +3964,9 @@ private actor FlakySSHKeyStorage: SSHKeyStorageManaging {
         XCTFail("changePassphrase should not be called")
     }
 
-    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {
+    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyRenameResult {
         XCTFail("rename should not be called")
-        return ""
+        return SSHKeyRenameResult(keyID: "", pathReplacements: [:])
     }
 
     func duplicate(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {

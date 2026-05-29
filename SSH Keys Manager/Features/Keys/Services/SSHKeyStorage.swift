@@ -1,5 +1,10 @@
 import Foundation
 
+struct SSHKeyRenameResult: Sendable, Equatable {
+    let keyID: SSHKeyItem.ID
+    let pathReplacements: [String: String]
+}
+
 protocol SSHKeyStorageManaging: Sendable {
     func updateSSHKeygenPath(_ path: String) async
     func loadKeys(from directoryPath: String) async throws -> SSHKeyInventory
@@ -8,7 +13,7 @@ protocol SSHKeyStorageManaging: Sendable {
     func delete(_ key: SSHKeyItem) async throws
     func updateComment(for key: SSHKeyItem, comment: String) async throws
     func changePassphrase(for key: SSHKeyItem, oldPassphrase: String, newPassphrase: String) async throws
-    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID
+    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyRenameResult
     func duplicate(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID
     func generateKey(_ request: SSHKeyGenerationRequest, in directoryPath: String) async throws -> SSHKeyItem.ID
     func availableKeyName(for baseName: String, in directoryPath: String) async throws -> String
@@ -70,7 +75,7 @@ actor SSHKeyStorage: SSHKeyStorageManaging {
         )
     }
 
-    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyItem.ID {
+    func rename(_ key: SSHKeyItem, to newName: String) async throws -> SSHKeyRenameResult {
         try keyStore.rename(key, to: newName)
     }
 

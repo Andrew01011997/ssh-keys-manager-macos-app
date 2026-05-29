@@ -14,8 +14,8 @@ struct ContentView: View {
         AppShellView(model: model)
             .frame(minWidth: 960, idealWidth: 960, minHeight: 660, idealHeight: 660)
             .task {
-                await model.keysCoordinator.loadIfNeeded()
-                await model.configCoordinator.loadIfNeeded()
+                await model.loadKeysIfNeeded()
+                await model.loadConfigIfNeeded()
             }
     }
 }

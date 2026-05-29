@@ -117,7 +117,7 @@ struct SSHKeyStore: @unchecked Sendable {
         )
     }
 
-    nonisolated func rename(_ key: SSHKeyItem, to newName: String) throws -> String {
+    nonisolated func rename(_ key: SSHKeyItem, to newName: String) throws -> SSHKeyRenameResult {
         let normalizedName = try normalizedKeyName(newName)
         let sourceURLs = key.pathsToRename.map(URL.init(fileURLWithPath:))
         guard !sourceURLs.isEmpty else {
@@ -144,8 +144,12 @@ struct SSHKeyStore: @unchecked Sendable {
                 movedPairs.append((source: sourceURL, target: targetURL))
             }
 
-            try updateSSHConfigReferences(from: key, targetURLs: targetURLs)
-            return targetPrimaryURL.path
+            return SSHKeyRenameResult(
+                keyID: targetPrimaryURL.path,
+                pathReplacements: Dictionary(
+                    uniqueKeysWithValues: zip(sourceURLs.map(\.path), targetURLs.map(\.path))
+                )
+            )
         } catch {
             for movedPair in movedPairs.reversed() where fileManager.fileExists(atPath: movedPair.target.path) {
                 try? fileManager.moveItem(at: movedPair.target, to: movedPair.source)
@@ -486,110 +490,6 @@ struct SSHKeyStore: @unchecked Sendable {
         for url in [privateKeyURL, publicKeyURL] where fileManager.fileExists(atPath: url.path) {
             try? fileManager.removeItem(at: url)
         }
-    }
-
-    nonisolated private func updateSSHConfigReferences(from key: SSHKeyItem, targetURLs: [URL]) throws {
-        let configURL = URL(fileURLWithPath: key.filePath).deletingLastPathComponent().appendingPathComponent("config")
-        guard fileManager.fileExists(atPath: configURL.path) else {
-            return
-        }
-
-        let originalContents = try String(contentsOf: configURL, encoding: .utf8)
-        var replacements: [String: String] = [:]
-
-        for (oldPath, newURL) in zip(key.pathsToRename, targetURLs) {
-            let oldURL = URL(fileURLWithPath: oldPath)
-            replacements[oldURL.path] = newURL.path
-            replacements[tildePath(for: oldURL)] = tildePath(for: newURL)
-        }
-
-        let updatedContents = updatedSSHConfigContents(originalContents, replacements: replacements)
-        if updatedContents != originalContents {
-            try updatedContents.write(to: configURL, atomically: true, encoding: .utf8)
-        }
-    }
-
-    nonisolated private func updatedSSHConfigContents(_ contents: String, replacements: [String: String]) -> String {
-        contents
-            .components(separatedBy: "\n")
-            .map { updatedSSHConfigLine($0, replacements: replacements) }
-            .joined(separator: "\n")
-    }
-
-    nonisolated private func updatedSSHConfigLine(_ line: String, replacements: [String: String]) -> String {
-        let lineEnding = line.hasSuffix("\r") ? "\r" : ""
-        let contentLine = lineEnding.isEmpty ? line : String(line.dropLast())
-        let leadingWhitespace = contentLine.prefix { $0 == " " || $0 == "\t" }
-        let remainder = contentLine.dropFirst(leadingWhitespace.count)
-        let keyword = "IdentityFile"
-
-        guard remainder.lowercased().hasPrefix(keyword.lowercased()) else {
-            return line
-        }
-
-        let afterKeyword = remainder.dropFirst(keyword.count)
-        guard let firstSeparator = afterKeyword.first, firstSeparator == " " || firstSeparator == "\t" else {
-            return line
-        }
-
-        let separator = afterKeyword.prefix { $0 == " " || $0 == "\t" }
-        let valueAndSuffix = afterKeyword.dropFirst(separator.count)
-        guard let parsedValue = sshConfigValue(in: valueAndSuffix) else {
-            return line
-        }
-
-        guard let replacement = replacements[parsedValue.value] else {
-            return line
-        }
-
-        let updatedValue: String
-        if let quote = parsedValue.quote {
-            updatedValue = "\(quote)\(replacement)\(quote)"
-        } else {
-            updatedValue = replacement
-        }
-
-        return "\(leadingWhitespace)\(keyword)\(separator)\(updatedValue)\(parsedValue.suffix)\(lineEnding)"
-    }
-
-    nonisolated private func sshConfigValue(in valueAndSuffix: Substring) -> SSHConfigValue? {
-        guard let firstCharacter = valueAndSuffix.first else {
-            return nil
-        }
-
-        if firstCharacter == "\"" || firstCharacter == "'" {
-            let quote = firstCharacter
-            let afterOpeningQuote = valueAndSuffix.dropFirst()
-            guard let closingQuoteIndex = afterOpeningQuote.firstIndex(of: quote) else {
-                return nil
-            }
-
-            return SSHConfigValue(
-                value: String(afterOpeningQuote[..<closingQuoteIndex]),
-                quote: quote,
-                suffix: String(afterOpeningQuote[afterOpeningQuote.index(after: closingQuoteIndex)...])
-            )
-        }
-
-        let value = valueAndSuffix.prefix { !$0.isWhitespace && $0 != "#" }
-        guard !value.isEmpty else {
-            return nil
-        }
-
-        return SSHConfigValue(
-            value: String(value),
-            quote: nil,
-            suffix: String(valueAndSuffix.dropFirst(value.count))
-        )
-    }
-
-    nonisolated private func tildePath(for url: URL) -> String {
-        let homePath = fileManager.homeDirectoryForCurrentUser.path
-        guard url.path == homePath || url.path.hasPrefix("\(homePath)/") else {
-            return url.path
-        }
-
-        return "~\(url.path.dropFirst(homePath.count))"
     }
 
     nonisolated private func isRegularFile(_ url: URL) -> Bool {
@@ -1031,12 +931,6 @@ private struct PublicKey {
 private struct PrivateKeyMetadata {
     let type: String
     let isPassphraseProtected: Bool
-}
-
-private struct SSHConfigValue {
-    let value: String
-    let quote: Character?
-    let suffix: String
 }
 
 enum SSHKeyStoreError: LocalizedError {

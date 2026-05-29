@@ -75,18 +75,20 @@ private struct SSHConfigFieldsSection: View {
 }
 
 private struct SSHConfigActionsSection: View {
+    private let itemSpacing: CGFloat = 10
+
     let entry: SSHConfigEntry
     let onEdit: (SSHConfigEntry) -> Void
     let onDelete: (SSHConfigEntry) -> Void
 
     var body: some View {
         InfoCard(spacing: 12, padding: 16) {
-            HStack {
-                AppButton("Edit Entry", systemImage: "pencil") {
+            HStack(spacing: itemSpacing) {
+                AppButton("Edit Entry", systemImage: "pencil", expands: true) {
                     onEdit(entry)
                 }
 
-                AppButton("Delete Entry", systemImage: "trash", tone: .destructive) {
+                AppButton("Delete Entry", systemImage: "trash", tone: .destructive, expands: true) {
                     onDelete(entry)
                 }
             }

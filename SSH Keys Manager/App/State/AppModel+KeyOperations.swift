@@ -21,114 +21,37 @@ extension AppModel {
     }
 
     func loadKeys() {
-        keysCoordinator.load()
+        Task {
+            await loadKeysAsync()
+        }
     }
 
     func loadKeysIfNeeded() async {
-        await keysCoordinator.loadIfNeeded()
+        guard loadedKeysDirectoryPath != sshDirectoryPath else {
+            return
+        }
+
+        await loadKeysAsync()
     }
 
     func revealSSHDirectoryInFinder() {
-        keysCoordinator.revealSSHDirectoryInFinder()
+        guard canRevealSSHDirectoryInFinder else {
+            return
+        }
+
+        keyActions.openDirectory(atPath: sshDirectoryPath)
     }
 
     func revealSelectedKeyInFinder() {
-        keysCoordinator.revealSelectedKeyInFinder()
+        guard let selectedKey else {
+            return
+        }
+
+        keyActions.reveal(selectedKey)
     }
 
     func copySelectedPublicKey() async {
-        await keysCoordinator.copySelectedPublicKey()
-    }
-
-    func copySelectedPrivateKey() async {
-        await keysCoordinator.copySelectedPrivateKey()
-    }
-
-    func copyPublicKey(for key: SSHKeyItem) async {
-        await keysCoordinator.copyPublicKey(for: key)
-    }
-
-    func copyPrivateKey(for key: SSHKeyItem) async {
-        await keysCoordinator.copyPrivateKey(for: key)
-    }
-
-    func copySelectedFingerprint() {
-        keysCoordinator.copySelectedFingerprint()
-    }
-
-    func deleteSelectedKey() async throws {
-        try await keysCoordinator.deleteSelectedKey()
-    }
-
-    func updateSelectedKeyComment(_ comment: String) async throws {
-        try await keysCoordinator.updateSelectedKeyComment(comment)
-    }
-
-    func changeSelectedKeyPassphrase(oldPassphrase: String, newPassphrase: String) async throws {
-        try await keysCoordinator.changeSelectedKeyPassphrase(
-            oldPassphrase: oldPassphrase,
-            newPassphrase: newPassphrase
-        )
-    }
-
-    func renameSelectedKey(to newName: String) async throws {
-        try await keysCoordinator.renameSelectedKey(to: newName)
-    }
-
-    func duplicateSelectedKey(to newName: String) async throws {
-        try await keysCoordinator.duplicateSelectedKey(to: newName)
-    }
-
-    func availableKeyName(for baseName: String) async -> String? {
-        await keysCoordinator.availableKeyName(for: baseName)
-    }
-
-    func generateKey(_ request: SSHKeyGenerationRequest) async throws {
-        try await keysCoordinator.generateKey(request)
-    }
-}
-
-@MainActor
-final class SSHKeysCoordinator {
-    private unowned let model: AppModel
-    private var isPrivateKeyCopyConfirmationSuppressed = false
-
-    init(model: AppModel) {
-        self.model = model
-    }
-
-    func load() {
-        Task {
-            await loadAsync()
-        }
-    }
-
-    func loadIfNeeded() async {
-        guard model.loadedKeysDirectoryPath != model.sshDirectoryPath else {
-            return
-        }
-
-        await loadAsync()
-    }
-
-    func revealSSHDirectoryInFinder() {
-        guard model.canRevealSSHDirectoryInFinder else {
-            return
-        }
-
-        model.keyActions.openDirectory(atPath: model.sshDirectoryPath)
-    }
-
-    func revealSelectedKeyInFinder() {
-        guard let selectedKey = model.selectedKey else {
-            return
-        }
-
-        model.keyActions.reveal(selectedKey)
-    }
-
-    func copySelectedPublicKey() async {
-        guard let selectedKey = model.selectedKey else {
+        guard let selectedKey else {
             return
         }
 
@@ -136,7 +59,7 @@ final class SSHKeysCoordinator {
     }
 
     func copySelectedPrivateKey() async {
-        guard let selectedKey = model.selectedKey else {
+        guard let selectedKey else {
             return
         }
 
@@ -145,11 +68,11 @@ final class SSHKeysCoordinator {
 
     func copyPublicKey(for key: SSHKeyItem) async {
         do {
-            let contents = try await model.keyStorage.publicKeyContents(for: key)
-            model.keyActions.copyToPasteboard(contents)
-            model.showNotification("Public key was copied to the clipboard", kind: .success)
+            let contents = try await keyStorage.publicKeyContents(for: key)
+            keyActions.copyToPasteboard(contents)
+            showNotification("Public key was copied to the clipboard", kind: .success)
         } catch {
-            model.keyErrorMessage = "Unable to copy public key for \(key.name): \(error.localizedDescription)"
+            keyErrorMessage = "Unable to copy public key for \(key.name): \(error.localizedDescription)"
         }
     }
 
@@ -159,20 +82,256 @@ final class SSHKeysCoordinator {
         }
 
         do {
-            let contents = try await model.keyStorage.privateKeyContents(for: key)
-            let clearSeconds = model.clipboardClearSeconds
-            model.keyActions.copySensitiveToPasteboard(
+            let contents = try await keyStorage.privateKeyContents(for: key)
+            let clearSeconds = clipboardClearSeconds
+            keyActions.copySensitiveToPasteboard(
                 contents,
                 clearAfter: TimeInterval(clearSeconds)
             )
-            model.showNotification(privateKeyCopyNotification(clearSeconds: clearSeconds), kind: .success)
+            showNotification(privateKeyCopyNotification(clearSeconds: clearSeconds), kind: .success)
         } catch {
-            model.keyErrorMessage = "Unable to copy private key for \(key.name): \(error.localizedDescription)"
+            keyErrorMessage = "Unable to copy private key for \(key.name): \(error.localizedDescription)"
         }
     }
 
-    private func shouldCopyPrivateKey(named keyName: String) -> Bool {
-        guard model.confirmPrivateKeyCopy, !isPrivateKeyCopyConfirmationSuppressed else {
+    func copySelectedFingerprint() {
+        guard let selectedKey else {
+            return
+        }
+
+        keyActions.copyFingerprint(selectedKey)
+        showNotification("Fingerprint was copied to the clipboard", kind: .success)
+    }
+
+    func deleteSelectedKey() async throws {
+        guard let selectedKey else {
+            return
+        }
+
+        let previousIndex = displayedKeys.firstIndex { $0.id == selectedKey.id } ?? 0
+        let runner = WorkspaceMutationRunner(model: self)
+
+        try await runner.runKeyMutation { directoryPath in
+            do {
+                try await keyStorage.delete(selectedKey)
+                guard runner.isCurrentWorkspace(directoryPath) else {
+                    return
+                }
+
+                showNotification("Deleted \(selectedKey.name)", kind: .success)
+                try await reloadKeyInventory(from: directoryPath)
+                guard runner.isCurrentWorkspace(directoryPath) else {
+                    return
+                }
+
+                runner.selectNextVisibleKey(afterDeletingAt: previousIndex)
+            } catch {
+                keyErrorMessage = "Unable to delete \(selectedKey.name): \(error.localizedDescription)"
+                throw error
+            }
+        }
+    }
+
+    func updateSelectedKeyComment(_ comment: String) async throws {
+        guard let selectedKey else {
+            return
+        }
+
+        let runner = WorkspaceMutationRunner(model: self)
+
+        try await runner.runKeyMutation { directoryPath in
+            do {
+                try await keyStorage.updateComment(for: selectedKey, comment: comment)
+                try await reloadKeyInventoryPreservingSelection(
+                    selectedKey.id,
+                    directoryPath: directoryPath,
+                    failurePrefix: "Updated comment, but could not refresh SSH keys"
+                )
+            } catch {
+                keyErrorMessage = "Unable to update comment for \(selectedKey.name): \(error.localizedDescription)"
+                throw error
+            }
+        }
+    }
+
+    func changeSelectedKeyPassphrase(oldPassphrase: String, newPassphrase: String) async throws {
+        guard let selectedKey else {
+            return
+        }
+
+        let isChangingExistingPassphrase = selectedKey.isPassphraseProtected
+        let actionVerb = isChangingExistingPassphrase ? "change" : "add"
+        let successVerb = isChangingExistingPassphrase ? "Changed" : "Added"
+        let runner = WorkspaceMutationRunner(model: self)
+
+        try await runner.runKeyMutation { directoryPath in
+            do {
+                try await keyStorage.changePassphrase(
+                    for: selectedKey,
+                    oldPassphrase: oldPassphrase,
+                    newPassphrase: newPassphrase
+                )
+                guard runner.isCurrentWorkspace(directoryPath) else {
+                    return
+                }
+            } catch {
+                showNotification("Unable to \(actionVerb) passphrase for \(selectedKey.name)", kind: .danger)
+                throw error
+            }
+
+            do {
+                try await reloadKeyInventory(from: directoryPath)
+                guard runner.isCurrentWorkspace(directoryPath) else {
+                    return
+                }
+
+                runner.restoreSelectedKey(selectedKey.id)
+                showNotification("\(successVerb) passphrase for \(selectedKey.name)", kind: .success)
+            } catch {
+                keyErrorMessage = "\(successVerb) passphrase, but could not refresh SSH keys: \(error.localizedDescription)"
+                throw error
+            }
+        }
+    }
+
+    func renameSelectedKey(to newName: String) async throws {
+        guard let selectedKey else {
+            return
+        }
+
+        let runner = WorkspaceMutationRunner(model: self)
+
+        try await runner.runKeyMutation { directoryPath in
+            let renameResult: SSHKeyRenameResult
+
+            do {
+                renameResult = try await keyStorage.rename(selectedKey, to: newName)
+            } catch {
+                keyErrorMessage = "Unable to rename \(selectedKey.name): \(error.localizedDescription)"
+                throw error
+            }
+
+            do {
+                try await configStorage.renameIdentityFileReferences(
+                    renameResult.pathReplacements,
+                    inDirectory: directoryPath,
+                    propertyIndentation: hostPropertyIndentation,
+                    backupLimit: configBackupLimit
+                )
+            } catch let renameConfigError {
+                do {
+                    try await rollbackRenamedKey(selectedKey, renameResult: renameResult)
+                } catch let rollbackFailure {
+                    let rollbackError = KeyRenameRecoveryError(
+                        renameError: renameConfigError,
+                        rollbackError: rollbackFailure
+                    )
+                    keyErrorMessage = "Unable to rename \(selectedKey.name): \(rollbackError.localizedDescription)"
+                    throw rollbackError
+                }
+
+                keyErrorMessage = "Unable to rename \(selectedKey.name): \(renameConfigError.localizedDescription)"
+                throw renameConfigError
+            }
+
+            try await reloadKeyInventoryPreservingSelection(
+                renameResult.keyID,
+                directoryPath: directoryPath,
+                failurePrefix: "Renamed key, but could not refresh SSH keys"
+            )
+        }
+    }
+
+    func duplicateSelectedKey(to newName: String) async throws {
+        guard let selectedKey else {
+            return
+        }
+
+        try await WorkspaceMutationRunner(model: self).runKeyMutation(requiresWriteAccess: false) { directoryPath in
+            do {
+                let duplicatedKeyID = try await keyStorage.duplicate(selectedKey, to: newName)
+                try await reloadKeyInventoryPreservingSelection(
+                    duplicatedKeyID,
+                    directoryPath: directoryPath,
+                    failurePrefix: "Duplicated key, but could not refresh SSH keys"
+                )
+            } catch {
+                keyErrorMessage = "Unable to duplicate \(selectedKey.name): \(error.localizedDescription)"
+                throw error
+            }
+        }
+    }
+
+    func availableKeyName(for baseName: String) async -> String? {
+        try? await keyStorage.availableKeyName(for: baseName, in: sshDirectoryPath)
+    }
+
+    func generateKey(_ request: SSHKeyGenerationRequest) async throws {
+        let runner = WorkspaceMutationRunner(model: self)
+
+        try await runner.runKeyMutation(requiresWriteAccess: false) { directoryPath in
+            do {
+                let generatedKeyID = try await keyStorage.generateKey(request, in: directoryPath)
+                guard runner.isCurrentWorkspace(directoryPath) else {
+                    return
+                }
+
+                try await reloadKeyInventory(from: directoryPath)
+                guard runner.isCurrentWorkspace(directoryPath) else {
+                    return
+                }
+
+                runner.restoreSelectedKey(generatedKeyID, listKind: .completePairs)
+                showNotification("Generated \(request.fileName)", kind: .success)
+            } catch {
+                keyErrorMessage = error.localizedDescription
+                throw error
+            }
+        }
+    }
+}
+
+private extension AppModel {
+    func loadKeysAsync() async {
+        let previousSelection = selectedKeyID
+        let directoryPath = sshDirectoryPath
+        var didLoadKeys = false
+
+        await withKeyOperation {
+            do {
+                let validatedPath = try validateWorkspaceDirectory(at: directoryPath)
+                guard validatedPath == sshDirectoryPath else {
+                    return
+                }
+
+                try await reloadKeyInventory(from: directoryPath)
+
+                if let previousSelection, displayedKeys.contains(where: { $0.id == previousSelection }) {
+                    selectedKeyID = previousSelection
+                } else {
+                    selectedKeyID = displayedKeys.first?.id
+                }
+
+                didLoadKeys = true
+            } catch {
+                guard directoryPath == sshDirectoryPath else {
+                    return
+                }
+
+                keys = []
+                otherKeys = []
+                selectedKeyID = nil
+                keyErrorMessage = "Unable to load SSH keys: \(error.localizedDescription)"
+            }
+
+            if didLoadKeys, directoryPath == sshDirectoryPath {
+                loadedKeysDirectoryPath = directoryPath
+            }
+        }
+    }
+
+    func shouldCopyPrivateKey(named keyName: String) -> Bool {
+        guard confirmPrivateKeyCopy, !isPrivateKeyCopyConfirmationSuppressed else {
             return true
         }
 
@@ -188,24 +347,15 @@ final class SSHKeysCoordinator {
         return true
     }
 
-    private func privateKeyCopyConfirmer() -> any PrivateKeyCopyConfirming {
-        if let provider = model.preferences as? PrivateKeyCopyConfirmationProviding {
+    func privateKeyCopyConfirmer() -> any PrivateKeyCopyConfirming {
+        if let provider = preferences as? PrivateKeyCopyConfirmationProviding {
             return provider.privateKeyCopyConfirmer
         }
 
         return NSAlertPrivateKeyCopyConfirmer()
     }
 
-    func copySelectedFingerprint() {
-        guard let selectedKey = model.selectedKey else {
-            return
-        }
-
-        model.keyActions.copyFingerprint(selectedKey)
-        model.showNotification("Fingerprint was copied to the clipboard", kind: .success)
-    }
-
-    private func privateKeyCopyNotification(clearSeconds: Int) -> String {
+    func privateKeyCopyNotification(clearSeconds: Int) -> String {
         guard clearSeconds > 0 else {
             return "Private key was copied to the clipboard"
         }
@@ -213,247 +363,39 @@ final class SSHKeysCoordinator {
         return "Private key copied - clearing in \(clearSeconds)s"
     }
 
-    func deleteSelectedKey() async throws {
-        guard let selectedKey = model.selectedKey else {
+    func rollbackRenamedKey(_ originalKey: SSHKeyItem, renameResult: SSHKeyRenameResult) async throws {
+        guard !renameResult.pathReplacements.isEmpty else {
             return
         }
 
-        guard !model.isReadOnlyModeEnabled else {
-            model.rejectReadOnlyModeMutation()
-            throw ReadOnlyModeRestrictionError.unavailable
-        }
-
-        let directoryPath = model.sshDirectoryPath
-        let previousIndex = model.displayedKeys.firstIndex { $0.id == selectedKey.id } ?? 0
-
-        try await model.withKeyOperation {
-            do {
-                try await model.keyStorage.delete(selectedKey)
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                model.showNotification("Deleted \(selectedKey.name)", kind: .success)
-
-                try await model.reloadKeyInventory(from: directoryPath)
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                selectKeyAfterDeletion(previousIndex: previousIndex)
-            } catch {
-                model.keyErrorMessage = "Unable to delete \(selectedKey.name): \(error.localizedDescription)"
-                throw error
-            }
-        }
+        let renamedKey = originalKey.applyingRenameResult(renameResult)
+        _ = try await keyStorage.rename(renamedKey, to: originalKey.name)
     }
+}
 
-    func updateSelectedKeyComment(_ comment: String) async throws {
-        guard let selectedKey = model.selectedKey else {
-            return
-        }
-
-        guard !model.isReadOnlyModeEnabled else {
-            model.rejectReadOnlyModeMutation()
-            throw ReadOnlyModeRestrictionError.unavailable
-        }
-
-        let directoryPath = model.sshDirectoryPath
-
-        try await model.withKeyOperation {
-            do {
-                try await model.keyStorage.updateComment(for: selectedKey, comment: comment)
-                try await model.reloadKeyInventoryPreservingSelection(
-                    selectedKey.id,
-                    directoryPath: directoryPath,
-                    failurePrefix: "Updated comment, but could not refresh SSH keys"
-                )
-            } catch {
-                model.keyErrorMessage = "Unable to update comment for \(selectedKey.name): \(error.localizedDescription)"
-                throw error
-            }
-        }
+private extension SSHKeyItem {
+    func applyingRenameResult(_ renameResult: SSHKeyRenameResult) -> SSHKeyItem {
+        SSHKeyItem(
+            id: renameResult.keyID,
+            name: URL(fileURLWithPath: renameResult.keyID).lastPathComponent,
+            publicKeyPath: publicKeyPath.map { renameResult.pathReplacements[$0] ?? $0 },
+            privateKeyPath: privateKeyPath.map { renameResult.pathReplacements[$0] ?? $0 },
+            filePath: renameResult.pathReplacements[filePath] ?? renameResult.keyID,
+            kind: kind,
+            type: type,
+            fingerprint: fingerprint,
+            comment: comment,
+            createdAt: createdAt,
+            isPassphraseProtected: isPassphraseProtected
+        )
     }
+}
 
-    func changeSelectedKeyPassphrase(oldPassphrase: String, newPassphrase: String) async throws {
-        guard let selectedKey = model.selectedKey else {
-            return
-        }
+private struct KeyRenameRecoveryError: LocalizedError {
+    let renameError: Error
+    let rollbackError: Error
 
-        guard !model.isReadOnlyModeEnabled else {
-            model.rejectReadOnlyModeMutation()
-            throw ReadOnlyModeRestrictionError.unavailable
-        }
-
-        let isChangingExistingPassphrase = selectedKey.isPassphraseProtected
-        let actionVerb = isChangingExistingPassphrase ? "change" : "add"
-        let successVerb = isChangingExistingPassphrase ? "Changed" : "Added"
-        let directoryPath = model.sshDirectoryPath
-
-        try await model.withKeyOperation {
-            do {
-                try await model.keyStorage.changePassphrase(
-                    for: selectedKey,
-                    oldPassphrase: oldPassphrase,
-                    newPassphrase: newPassphrase
-                )
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-            } catch {
-                model.showNotification("Unable to \(actionVerb) passphrase for \(selectedKey.name)", kind: .danger)
-                throw error
-            }
-
-            do {
-                try await model.reloadKeyInventory(from: directoryPath)
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                if model.displayedKeys.contains(where: { $0.id == selectedKey.id }) {
-                    model.selectedKeyID = selectedKey.id
-                }
-
-                model.showNotification("\(successVerb) passphrase for \(selectedKey.name)", kind: .success)
-            } catch {
-                model.keyErrorMessage = "\(successVerb) passphrase, but could not refresh SSH keys: \(error.localizedDescription)"
-                throw error
-            }
-        }
-    }
-
-    func renameSelectedKey(to newName: String) async throws {
-        guard let selectedKey = model.selectedKey else {
-            return
-        }
-
-        guard !model.isReadOnlyModeEnabled else {
-            model.rejectReadOnlyModeMutation()
-            throw ReadOnlyModeRestrictionError.unavailable
-        }
-
-        let directoryPath = model.sshDirectoryPath
-
-        try await model.withKeyOperation {
-            do {
-                let renamedKeyID = try await model.keyStorage.rename(selectedKey, to: newName)
-                try await model.reloadKeyInventoryPreservingSelection(
-                    renamedKeyID,
-                    directoryPath: directoryPath,
-                    failurePrefix: "Renamed key, but could not refresh SSH keys"
-                )
-            } catch {
-                model.keyErrorMessage = "Unable to rename \(selectedKey.name): \(error.localizedDescription)"
-                throw error
-            }
-        }
-    }
-
-    func duplicateSelectedKey(to newName: String) async throws {
-        guard let selectedKey = model.selectedKey else {
-            return
-        }
-
-        let directoryPath = model.sshDirectoryPath
-
-        try await model.withKeyOperation {
-            do {
-                let duplicatedKeyID = try await model.keyStorage.duplicate(selectedKey, to: newName)
-                try await model.reloadKeyInventoryPreservingSelection(
-                    duplicatedKeyID,
-                    directoryPath: directoryPath,
-                    failurePrefix: "Duplicated key, but could not refresh SSH keys"
-                )
-            } catch {
-                model.keyErrorMessage = "Unable to duplicate \(selectedKey.name): \(error.localizedDescription)"
-                throw error
-            }
-        }
-    }
-
-    func availableKeyName(for baseName: String) async -> String? {
-        try? await model.keyStorage.availableKeyName(for: baseName, in: model.sshDirectoryPath)
-    }
-
-    func generateKey(_ request: SSHKeyGenerationRequest) async throws {
-        let directoryPath = model.sshDirectoryPath
-
-        try await model.withKeyOperation {
-            do {
-                let generatedKeyID = try await model.keyStorage.generateKey(request, in: directoryPath)
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                try await model.reloadKeyInventory(from: directoryPath)
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                model.selectedKeyList = .completePairs
-
-                if model.displayedKeys.contains(where: { $0.id == generatedKeyID }) {
-                    model.selectedKeyID = generatedKeyID
-                } else {
-                    model.selectedKeyID = model.displayedKeys.first?.id
-                }
-
-                model.showNotification("Generated \(request.fileName)", kind: .success)
-            } catch {
-                model.keyErrorMessage = error.localizedDescription
-                throw error
-            }
-        }
-    }
-
-    private func loadAsync() async {
-        let previousSelection = model.selectedKeyID
-        let directoryPath = model.sshDirectoryPath
-        var didLoadKeys = false
-
-        await model.withKeyOperation {
-            do {
-                let validatedPath = try model.validateWorkspaceDirectory(at: directoryPath)
-                guard validatedPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                try await model.reloadKeyInventory(from: directoryPath)
-
-                if let previousSelection, model.displayedKeys.contains(where: { $0.id == previousSelection }) {
-                    model.selectedKeyID = previousSelection
-                } else {
-                    model.selectedKeyID = model.displayedKeys.first?.id
-                }
-
-                didLoadKeys = true
-            } catch {
-                guard directoryPath == model.sshDirectoryPath else {
-                    return
-                }
-
-                model.keys = []
-                model.otherKeys = []
-                model.selectedKeyID = nil
-                model.keyErrorMessage = "Unable to load SSH keys: \(error.localizedDescription)"
-            }
-
-            if didLoadKeys, directoryPath == model.sshDirectoryPath {
-                model.loadedKeysDirectoryPath = directoryPath
-            }
-        }
-    }
-
-    private func selectKeyAfterDeletion(previousIndex: Int) {
-        let visibleKeys = model.displayedKeys
-
-        if visibleKeys.isEmpty {
-            model.selectedKeyID = nil
-            return
-        }
-
-        let nextIndex = min(previousIndex, visibleKeys.count - 1)
-        model.selectedKeyID = visibleKeys[nextIndex].id
+    var errorDescription: String? {
+        "Failed to update SSH config after renaming the key, and rollback failed: \(renameError.localizedDescription). Rollback error: \(rollbackError.localizedDescription)"
     }
 }

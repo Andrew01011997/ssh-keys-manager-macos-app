@@ -4,13 +4,6 @@ import Observation
 @MainActor
 @Observable
 final class AppModel {
-    @ObservationIgnored
-    lazy var keysCoordinator = SSHKeysCoordinator(model: self)
-    @ObservationIgnored
-    lazy var configCoordinator = SSHConfigCoordinator(model: self)
-    @ObservationIgnored
-    lazy var workspaceCoordinator = AppWorkspaceCoordinator(model: self)
-
     var selectedTab: AppTab = .keys
     var selectedKeyID: SSHKeyItem.ID?
     var selectedConfigEntryID: SSHConfigEntry.ID?
@@ -92,6 +85,7 @@ final class AppModel {
     var activeDirectoryChangeCount = 0
     var loadedKeysDirectoryPath: String?
     var loadedConfigDirectoryPath: String?
+    @ObservationIgnored var isPrivateKeyCopyConfirmationSuppressed = false
     @ObservationIgnored var configHostCheckGeneration = 0
     @ObservationIgnored var configHostReachabilityTask: Task<Void, Never>?
 
