@@ -18,14 +18,12 @@ struct SSHKeyStore: @unchecked Sendable {
         Self(fileManager: fileManager, sshKeygenURL: sshKeygenURL)
     }
 
-    nonisolated func loadKeys(from directoryPath: String) throws -> SSHKeyInventory {
+    nonisolated func loadKeys(
+        from directoryPath: String,
+        scanOptions: SSHKeyScanOptions = .default
+    ) throws -> SSHKeyInventory {
         let directoryURL = expandedDirectoryURL(for: directoryPath)
-        let fileURLs = try fileManager.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        )
-        let regularFileURLs = fileURLs.filter { isRegularFile($0) }
+        let regularFileURLs = try collectKeyFileURLs(in: directoryURL, scanOptions: scanOptions)
         var pairedPublicKeyPaths = Set<String>()
         var pairedPrivateKeyPaths = Set<String>()
 
@@ -241,6 +239,20 @@ struct SSHKeyStore: @unchecked Sendable {
                 .filter { isRegularFile($0) }
                 .map(\.lastPathComponent)
         )
+    }
+
+    nonisolated func subfolderNames(in directoryPath: String) throws -> [String] {
+        let directoryURL = expandedDirectoryURL(for: directoryPath)
+        let contents = try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        return contents
+            .filter { isDirectory($0) }
+            .map(\.lastPathComponent)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     nonisolated private func expandedDirectoryURL(for path: String) -> URL {
@@ -499,6 +511,79 @@ struct SSHKeyStore: @unchecked Sendable {
         }
 
         return true
+    }
+
+    nonisolated private func isDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return false
+        }
+
+        return isDirectory.boolValue
+    }
+
+    nonisolated private func collectKeyFileURLs(
+        in rootURL: URL,
+        scanOptions: SSHKeyScanOptions
+    ) throws -> [URL] {
+        var regularFileURLs = try regularFiles(in: rootURL)
+
+        guard scanOptions.includesSubfolders else {
+            return regularFileURLs
+        }
+
+        for subfolderURL in subfolderDirectoriesToScan(in: rootURL, scanOptions: scanOptions) {
+            regularFileURLs += (try? regularFiles(in: subfolderURL)) ?? []
+        }
+
+        return regularFileURLs
+    }
+
+    nonisolated private func regularFiles(in directoryURL: URL) throws -> [URL] {
+        let fileURLs = try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        return fileURLs.filter { isRegularFile($0) }
+    }
+
+    nonisolated private func subfolderDirectoriesToScan(
+        in rootURL: URL,
+        scanOptions: SSHKeyScanOptions
+    ) -> [URL] {
+        switch scanOptions.scope {
+        case .allSubfolders:
+            return descendantDirectories(of: rootURL)
+        case .selectedFolders:
+            return scanOptions.selectedSubfolders.flatMap { relativePath -> [URL] in
+                let folderURL = rootURL.appendingPathComponent(relativePath, isDirectory: true)
+                guard isDirectory(folderURL) else {
+                    return []
+                }
+
+                return [folderURL] + descendantDirectories(of: folderURL)
+            }
+        }
+    }
+
+    nonisolated private func descendantDirectories(of directoryURL: URL) -> [URL] {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var directories: [URL] = []
+        for itemURL in contents where isDirectory(itemURL) {
+            directories.append(itemURL)
+            directories += descendantDirectories(of: itemURL)
+        }
+
+        return directories
     }
 
     nonisolated private func completePairItem(privateKeyURL: URL, publicKeyURL: URL) -> SSHKeyItem? {
