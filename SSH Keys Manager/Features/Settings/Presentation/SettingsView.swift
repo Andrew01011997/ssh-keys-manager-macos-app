@@ -329,7 +329,7 @@ private struct SSHDirectoryContent: View {
                 SSHSubfolderScopeRow(model: model)
 
                 if model.subfolderScope == .selectedFolders {
-                    SSHSubfolderSelectionList(model: model)
+                    SSHSubfolderSelectionRow(model: model)
                 }
             }
         }
@@ -385,28 +385,175 @@ private struct SSHSubfolderScopeRow: View {
     }
 }
 
-private struct SSHSubfolderSelectionList: View {
+private struct SSHSubfolderSelectionRow: View {
     @Bindable var model: AppModel
+    @State private var isSelectionSheetPresented = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if model.availableSubfolders.isEmpty {
-                Text("No subfolders found in the SSH keys directory.")
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Selected Folders")
+                    .font(.headline)
+                Text(summary)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            AppButton("Choose...", systemImage: "checklist") {
+                isSelectionSheetPresented = true
+            }
+            .disabled(model.availableSubfolders.isEmpty)
+            .help("Choose which subfolders to include")
+        }
+        .sheet(isPresented: $isSelectionSheetPresented) {
+            SSHSubfolderSelectionSheet(
+                availableFolders: model.availableSubfolders,
+                selectedFolders: model.selectedSubfolders,
+                onApply: model.setSelectedSubfolders
+            )
+        }
+    }
+
+    private var summary: String {
+        let availableCount = model.availableSubfolders.count
+
+        guard availableCount > 0 else {
+            return "No subfolders found in the SSH keys directory."
+        }
+
+        let selectedCount = model.availableSubfolders.filter(model.selectedSubfolders.contains).count
+        let noun = selectedCount == 1 ? "folder" : "folders"
+        return "\(selectedCount) of \(availableCount) \(noun) selected."
+    }
+}
+
+private struct SSHSubfolderSelectionSheet: View {
+    let availableFolders: [String]
+    let onApply: ([String]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection: Set<String>
+    @State private var searchText = ""
+    /// Selected folders that no longer exist on disk; kept so they come back if the folder reappears.
+    private let missingSelectedFolders: [String]
+
+    init(availableFolders: [String], selectedFolders: [String], onApply: @escaping ([String]) -> Void) {
+        self.availableFolders = availableFolders
+        self.onApply = onApply
+        _selection = State(initialValue: Set(selectedFolders))
+        missingSelectedFolders = selectedFolders.filter { !availableFolders.contains($0) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            DetailTitle(
+                title: "Selected Folders",
+                subtitle: selectionSummary,
+                systemImage: "folder.badge.gearshape"
+            )
+
+            HStack(spacing: 8) {
+                SearchField(text: $searchText, placeholder: "Search folders...")
+
+                AppButton("Select All", action: selectAllFiltered)
+                    .disabled(filteredFolders.allSatisfy(selection.contains))
+                    .help("Select all folders shown in the list")
+
+                AppButton("Select None", action: deselectAllFiltered)
+                    .disabled(!filteredFolders.contains(where: selection.contains))
+                    .help("Deselect all folders shown in the list")
+            }
+
+            SSHSubfolderSelectionList(
+                folders: filteredFolders,
+                selection: $selection
+            )
+
+            HStack {
+                Spacer()
+
+                AppButton("Cancel", action: dismiss.callAsFunction)
+                    .keyboardShortcut(.cancelAction)
+
+                AppButton("Apply", tone: .primary, action: apply)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+    }
+
+    private var filteredFolders: [String] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !query.isEmpty else {
+            return availableFolders
+        }
+
+        return availableFolders.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    private var selectionSummary: String {
+        let selectedCount = availableFolders.filter(selection.contains).count
+        return "\(selectedCount) of \(availableFolders.count) selected"
+    }
+
+    private func selectAllFiltered() {
+        selection.formUnion(filteredFolders)
+    }
+
+    private func deselectAllFiltered() {
+        selection.subtract(filteredFolders)
+    }
+
+    private func apply() {
+        let folders = availableFolders.filter(selection.contains) + missingSelectedFolders
+        onApply(folders)
+        dismiss()
+    }
+}
+
+private struct SSHSubfolderSelectionList: View {
+    let folders: [String]
+    @Binding var selection: Set<String>
+
+    var body: some View {
+        Group {
+            if folders.isEmpty {
+                Text("No folders match your search.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ForEach(model.availableSubfolders, id: \.self) { folder in
-                    SSHSubfolderToggleRow(
-                        folder: folder,
-                        isOn: Binding(
-                            get: { model.selectedSubfolders.contains(folder) },
-                            set: { isOn in model.setSubfolder(folder, included: isOn) }
-                        )
-                    )
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(folders, id: \.self) { folder in
+                            SSHSubfolderToggleRow(
+                                folder: folder,
+                                isOn: Binding(
+                                    get: { selection.contains(folder) },
+                                    set: { isOn in
+                                        if isOn {
+                                            selection.insert(folder)
+                                        } else {
+                                            selection.remove(folder)
+                                        }
+                                    }
+                                )
+                            )
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 280)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+        }
     }
 }
 
@@ -421,6 +568,8 @@ private struct SSHSubfolderToggleRow: View {
                     .foregroundStyle(.secondary)
                 Text(folder)
                     .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
         .toggleStyle(.checkbox)

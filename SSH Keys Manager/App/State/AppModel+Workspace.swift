@@ -46,16 +46,12 @@ extension AppModel {
         }
     }
 
-    func setSubfolder(_ folder: String, included: Bool) {
-        if included {
-            guard !selectedSubfolders.contains(folder) else {
-                return
-            }
-
-            selectedSubfolders.append(folder)
-        } else {
-            selectedSubfolders.removeAll { $0 == folder }
+    func setSelectedSubfolders(_ folders: [String]) {
+        guard folders != selectedSubfolders else {
+            return
         }
+
+        selectedSubfolders = folders
     }
 
     func createEmptyConfigFile() async {
